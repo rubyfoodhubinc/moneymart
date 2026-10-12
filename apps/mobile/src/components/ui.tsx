@@ -149,6 +149,16 @@ export function Button({
   return (
     <Pressable
       accessibilityRole="button"
+      /**
+       * The visible label IS the accessible name.
+       *
+       * The button announced only its role, so a screen reader read "button" with no
+       * indication of what it does — and no UI test could address it by its text
+       * either, which is how this was found. A caller can still override it, because
+       * `props` is spread below.
+       */
+      accessibilityLabel={typeof label === 'string' ? label : undefined}
+      accessibilityState={{ disabled: Boolean(disabled || loading), busy: Boolean(loading) }}
       disabled={disabled || loading}
       style={({ pressed }) => [containerStyle, pressed ? styles.pressed : null]}
       {...props}
