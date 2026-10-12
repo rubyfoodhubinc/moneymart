@@ -646,6 +646,13 @@ unambiguous defect — one listing could carry a payload every client then downl
 | **Bytes are sniffed**, not the declared MIME | a payload claiming `image/png` while containing an SVG is refused |
 | **Scheme is allowlisted** (`http`/`https`/`data:image/*`) | a blocklist of `javascript:` would miss `vbscript:`, `blob:`, `filesystem:` |
 | **SVG refused outright** | the one image format that can carry script; no listing photo needs it |
+
+**SVG is refused for user submissions only.** The platform's own seeded artwork is
+SVG — verified by inspecting the live product, where all 23 rendered images on
+`/auctions` are `data:image/svg+xml`. That is trusted first-party content written
+directly by the seed, which does not pass through the validator, so refusing SVG
+from sellers cannot blank the catalogue. The distinction is deliberate rather than
+accidental: first-party artwork may be vector, untrusted uploads may not.
 | **≤ 20 images, ≤ 3 MB each** | the blueprint's ceiling, and a bound on store inflation |
 | **Duplicates collapsed** | they waste storage and render identically |
 
