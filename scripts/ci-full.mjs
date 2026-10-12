@@ -64,6 +64,25 @@ const chromePath = [
   '/usr/bin/chromium-browser',
 ].find((candidate) => existsSync(candidate));
 
+/**
+ * Is something already listening on a port?
+ *
+ * The gate must not start a second server on an occupied port: it would either
+ * fail to bind or, worse, quietly test the wrong instance. This also means the
+ * gate can be pointed at servers a developer already has running, which is the
+ * common local case.
+ */
+async function portInUse(port) {
+  try {
+    // Any response — even a 404 — proves a listener exists.
+    await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1200) });
+    return true;
+  } catch {
+    // A refused connection means free; a timeout means something is there but slow.
+    return false;
+  }
+}
+
 const children = [];
 function start(label, command, args, extraEnv = {}) {
   const child = spawn(command, args, {
@@ -78,6 +97,12 @@ function start(label, command, args, extraEnv = {}) {
   return child;
 }
 
+/**
+ * Stop only what this run started.
+ *
+ * Anything reused belongs to someone else and must survive the gate; killing it
+ * would be a side effect a test runner has no business having.
+ */
 const stopAll = () => {
   for (const { child } of children) {
     try {
@@ -104,24 +129,62 @@ if (!existsSync(entry)) {
   process.exit(1);
 }
 
-/* ── Start the services ────────────────────────────────────────────────── */
-start('api', process.execPath, [entry], {
-  PORT: String(API_PORT),
-  NODE_ENV: 'development',
-  MM_SEED: 'true',
-  MM_PERSISTENCE: 'off',
-  MM_AUTH_DEV_CODES: 'true',
-});
+/* ── Start the services that are not already running ───────────────────── */
+const reused = [];
+const started = [];
 
-start('web', 'bash', [path.join(repoRoot, 'scripts', 'start-web.sh')], {
-  WEB_PORT: String(WEB_PORT),
-  VITE_API_URL: `http://127.0.0.1:${API_PORT}`,
-});
+for (const service of [
+  {
+    label: 'api',
+    port: API_PORT,
+    launch: () =>
+      start('api', process.execPath, [entry], {
+        PORT: String(API_PORT),
+        NODE_ENV: 'development',
+        MM_SEED: 'true',
+        MM_PERSISTENCE: 'off',
+        MM_AUTH_DEV_CODES: 'true',
+      }),
+  },
+  {
+    label: 'web',
+    port: WEB_PORT,
+    launch: () =>
+      start('web', 'bash', [path.join(repoRoot, 'scripts', 'start-web.sh')], {
+        WEB_PORT: String(WEB_PORT),
+        VITE_API_URL: `http://127.0.0.1:${API_PORT}`,
+      }),
+  },
+  {
+    label: 'tv',
+    port: TV_PORT,
+    launch: () =>
+      start('tv', 'bash', [path.join(repoRoot, 'scripts', 'start-tv.sh')], {
+        TV_PORT: String(TV_PORT),
+        VITE_API_URL: `http://127.0.0.1:${API_PORT}`,
+      }),
+  },
+]) {
+  if (await portInUse(service.port)) {
+    /**
+     * Reuse rather than fight. Starting a second server on a busy port would
+     * either fail to bind or test an instance the run did not configure — and
+     * killing whatever is already there at teardown would take down a developer's
+     * servers, which is worse than failing.
+     */
+    reused.push(service.label);
+  } else {
+    service.launch();
+    started.push(service.label);
+  }
+}
 
-start('tv', 'bash', [path.join(repoRoot, 'scripts', 'start-tv.sh')], {
-  TV_PORT: String(TV_PORT),
-  VITE_API_URL: `http://127.0.0.1:${API_PORT}`,
-});
+if (reused.length) {
+  console.log(`  \u001b[2mreusing already-running: ${reused.join(', ')}\u001b[0m`);
+}
+if (started.length) {
+  console.log(`  \u001b[2mstarted: ${started.join(', ')}\u001b[0m`);
+}
 
 async function waitFor(url, label, timeoutMs = 90_000) {
   const deadline = Date.now() + timeoutMs;
