@@ -33,8 +33,9 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **536 automated checks** across 19 suites — `pnpm verify:all` |
+| **Verification** | ✅ **542 automated checks** across 19 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -110,7 +111,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Auction engine (§9.2 rules)            31 passed
   PASS  Realtime Socket.IO (§9.2 broadcast)    19 passed
   PASS  Payments & escrow (§9.1)               31 passed
-  PASS  TV / IPTV (§7)                         35 passed
+  PASS  TV / IPTV (§7)                         41 passed
   PASS  Payments & membership                  35 passed
   PASS  Authentication                         48 passed
   PASS  Persistence                            21 passed
@@ -121,7 +122,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  536 passed   0 failed
+  TOTAL  542 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -557,6 +558,39 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## TV D-pad: three defects a real key press found
+
+The TV suite read the focus engine's **source** and grepped it for the strings
+`'ArrowDown'` and `'ArrowRight'`. It never pressed a key, so three defects in the
+defining feature of a TV app survived — all invisible to a grep and obvious to a
+remote:
+
+1. **Two elements could both hold focus.** Focus ids came from the auction id alone
+   (`auction-${id}`), and a lot legitimately appears in more than one row —
+   "Ending Soon" *and* "Just Added". The engine keys focus by id in a `Map`, so the
+   second registration replaced the first, and because `focused` is
+   `activeId === id`, **both cards rendered a gold ring** while only one was
+   reachable. Ids are now row-scoped, and the engine records and warns about a
+   duplicate rather than letting it flicker quietly.
+
+2. **Focus could move somewhere invisible.** `html`, `body` and `#root` were all
+   `overflow: hidden` with `.tv-screen { height: 100% }`, so the page could not
+   scroll at all. Measured: pressing Down moved focus to a card at **y = −697**,
+   permanently off-screen. `#root` is now the one scrollable axis and the screen
+   uses `min-height`.
+
+3. **The scroll settled 8px short.** `focus({preventScroll:false})` and a
+   `scrollIntoView({behavior:'smooth'})` both start animations and the second
+   interrupts the first, with a CSS `scroll-behavior: smooth` competing as well.
+   The ring was visible while the price and title under it were not. The scroll is
+   now instant, with a scroll-margin on focused cards — which is also what a D-pad
+   needs, since a remote emits keys faster than an animation completes.
+
+Now asserted by driving Chrome at a 1920×1080 10-foot viewport with genuine arrow
+key events: every press moves focus, every focused card is **fully** on screen, and
+focus never lands on two elements at once. **Two of those fail against the previous
+code.** Verified against the live deployment as well as locally.
 
 ## The deployed product, verified
 
