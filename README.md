@@ -24,7 +24,8 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Payments & escrow** | ✅ Provider-abstracted rails + enforced hold/release state machine |
 | **Memberships** | ✅ RevenueCat entitlements — Pro pricing 10%/15% enforced server-side |
 | **Live video** | ✅ Real HLS in the stream room — proven decoding in headless Chrome |
-| **Verification** | ✅ **236 automated checks** across 9 suites — `pnpm verify:all` |
+| **Studio** | ✅ Drag-to-reorder sections + seller photo reordering (§5.2) |
+| **Verification** | ✅ **258 automated checks** across 10 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -90,7 +91,7 @@ missing asset returning `404` instead of silently serving the shell.
 
 ```bash
 pnpm verify:all                            # 177 checks across 8 suites — the release gate
-MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 236 — adds browser + native checks
+MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every suite
 ```
 
 ```
@@ -102,13 +103,14 @@ MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 236 — adds browser + nati
   PASS  Payments & escrow (§9.1)               31 passed
   PASS  TV / IPTV (§7)                         35 passed
   PASS  Payments & membership                  35 passed
+  PASS  Browser UI (real Chrome)               22 passed
   PASS  HLS playback (real browser)            29 passed
   PASS  Payments & membership                  35 passed
   PASS  Mobile (native build)                   42 passed
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  236 passed   0 failed
+  TOTAL  258 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -119,6 +121,7 @@ pnpm verify            # engine rules over REST (31)
 pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
+pnpm verify:ui         # real Chrome: pages mount, drag handles, keyboard reorder (22)
 pnpm verify:hls        # real Chrome decodes every resolver manifest (29)
 pnpm verify:subscriptions  # providers, identity guard, entitlements, Pro pricing (35)
 pnpm verify:mobile     # icons, store identity, Hermes bundles, QR deep link (42)
@@ -271,6 +274,34 @@ Connect. The stub says so rather than pretending otherwise.
 Until a key is present the `SimulatedProvider` runs the identical lifecycle, so
 the flow is never dead-ended. Declines are reproducible on demand (amount ending
 `.13`).
+
+## Drag positioning (§5.2, Studio)
+
+Studio sections and seller photos both reorder by dragging, with keyboard parity.
+
+The primitive is built on **Pointer Events, not the HTML5 drag-and-drop API**:
+DnD does not fire on touch devices (which the seller flow depends on), cannot
+animate displaced items, and still forces you to derive a drop index from pixels
+anyway. It lives in `components/DragReorder.tsx`, with the index arithmetic
+*exported so it is testable without a DOM* — an off-by-one in reordering is
+invisible on screen until a creator has lost a section.
+
+```
+reorder(items, from, to)                  // index-safe; out-of-range is a no-op
+computeDropIndex(pointerY, rects, from)   // midpoint-based, height-agnostic
+```
+
+Two details worth stating, because both are easy to get wrong:
+
+- **The return value is the index the item takes in the reordered list, not the
+  slot its pointer is over.** Those differ by one when dragging downwards, since
+  removing the item shifts everything below it up. Deleting that correction
+  misplaces the item on every downward drag.
+- **Studio reordering walks the FULL block list while each rendered block keeps
+  its true index**, so hiding a section cannot silently reorder the document.
+
+Keyboard users get the same capability — focus a handle and use the arrow keys,
+with Home/End jumping to the ends. Drag is never the only way to move something.
 
 ## Live video (§5.3)
 
