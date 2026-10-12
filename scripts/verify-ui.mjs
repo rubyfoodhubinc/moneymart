@@ -26,6 +26,16 @@ const URL_BASE = flagIndex('--url') >= 0 ? args[flagIndex('--url') + 1] : (proce
  * mm-config.json — which is why a local dev server still talks to a local API
  * even though the config file names production.
  */
+/**
+ * The address domain used for test sign-ins.
+ *
+ * Deliberately NOT `example.com`: Resend refuses that domain outright (422),
+ * regardless of how the sender is configured, so a suite using it can never
+ * exercise the delivered path — it silently tests only the refusal branch. A real
+ * domain keeps both branches reachable.
+ */
+const TEST_EMAIL_DOMAIN = process.env.MM_UI_TEST_EMAIL_DOMAIN ?? 'gmail.com';
+
 const API_BASE = (
   flagIndex('--api') >= 0 ? args[flagIndex('--api') + 1] : (process.env.API_URL ?? 'http://127.0.0.1:4317')
 ).replace(/\/$/, '');
@@ -256,7 +266,7 @@ async function signInForTests() {
    */
   await fetch(`${API_BASE}/api/dev/rate-limit/reset`, { method: 'POST' }).catch(() => null);
 
-  const identifier = `uitest.${Date.now()}.${Math.random().toString(36).slice(2, 6)}@example.com`;
+  const identifier = `uitest.${Date.now()}.${Math.random().toString(36).slice(2, 6)}@${TEST_EMAIL_DOMAIN}`;
   const requested = await fetch(`${API_BASE}/api/auth/request`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -413,7 +423,7 @@ const apiCode = await evaluate(`(async () => {
   const response = await fetch(${JSON.stringify(API_BASE)} + '/api/auth/request', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier: 'rawcheck.' + Date.now() + '@example.com' }),
+    body: JSON.stringify({ identifier: 'rawcheck.' + Date.now() + '@' + ${JSON.stringify(TEST_EMAIL_DOMAIN)} }),
   });
   const body = await response.json().catch(() => null);
   return { status: response.status, devCode: body && body.devCode ? body.devCode : null, delivery: body && body.delivery ? body.delivery.transport : null };
@@ -458,7 +468,7 @@ const signIn = await evaluate(`(async () => {
   };
   const byText = (node, re) => re.test((node.textContent || '').trim());
 
-  const identifier = 'verifyui.' + Date.now() + '@example.com';
+  const identifier = 'verifyui.' + Date.now() + '@' + ${JSON.stringify(TEST_EMAIL_DOMAIN)};
   const field = [...document.querySelectorAll('input')].find((i) => /example\.com|phone/i.test(i.placeholder || ''));
   if (!field) return { step: 'no-field' };
 
