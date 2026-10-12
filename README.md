@@ -33,11 +33,12 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Durability** | ✅ Escrow, disputes and payouts survive a restart; the loss window is measured |
 | **Disputes** | ✅ Admin-only resolution; a refund returns funds, and neither branch can double-pay |
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **608 automated checks** across 21 suites — `pnpm verify:all` |
+| **Verification** | ✅ **641 automated checks** across 22 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -124,7 +125,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  608 passed   0 failed
+  TOTAL  641 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -138,6 +139,7 @@ pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
 pnpm verify:lifecycle  # listing → bid → settle → pay → escrow → release → books (36)
 pnpm verify:dispute    # admin-only resolution, refund, seller-favourable release (30)
+pnpm verify:restart    # escrow, disputes and payouts across a process restart (33)
 pnpm verify:delivery   # the sent code is the verified code; senders and failures (31)
 pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (47)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
@@ -562,6 +564,39 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## A restart with money in flight
+
+Persistence had a suite and the money paths had suites, but nothing restarted the
+process **in the middle of a transaction**. That is the seam where *"the data is
+saved"* and *"the business state is saved"* come apart: an order whose funds are in
+escrow is not a row, it is a liability the platform owes back or owes onward, and
+losing it means losing money a real buyer paid.
+
+```bash
+pnpm verify:restart   # 33 checks, restarting at five different points
+```
+
+| Restarted… | What must hold |
+|---|---|
+| in escrow | held amount and state unchanged, and the ledger can still be **settled** — a ledger that persists but cannot be acted on would strand the money |
+| disputed | the dispute survives **and can still be resolved**, or the buyer's claim freezes with the funds |
+| released | exactly one payout, seller balance unchanged, confirming again pays nothing |
+| mid-auction | bid ladder and auction clock survive |
+| authenticated | a pre-restart token is **rejected**, by design |
+
+That last one is asserted as **intent, not a defect**: a snapshot is a durable
+document that gets copied, backed up and read by operators, so bearer tokens must
+not be in it. Dropping sessions on restart is the safe direction to fail.
+
+**The durability window is measured, not implied.** A hard kill between flushes
+loses the unflushed writes — the documented trade of periodic snapshotting. The
+check records that while asserting every *previously flushed* record survives, so
+the store comes back usable rather than empty. The snapshot file is inspected
+directly too: it contains escrow, orders and payouts, and no session tokens.
+
+All 33 passed **without a code change**, which is the first time in seven rounds a
+composition seam held on the first attempt.
 
 ## Disputes: a verdict that could never be reached
 
