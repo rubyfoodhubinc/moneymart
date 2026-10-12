@@ -29,7 +29,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Persistence** | ✅ Postgres snapshotting — data survives redeploys (proven in production) |
 | **Authorization** | ✅ Object-level checks — orders private to participants, storefront writes owner-scoped |
 | **Rate limiting** | ✅ Ingress limits on the message-sending and write paths |
-| **Verification** | ✅ **399 automated checks** across 15 suites — `pnpm verify:all` |
+| **Verification** | ✅ **423 automated checks** across 16 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -116,7 +116,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  399 passed   0 failed
+  TOTAL  423 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -128,6 +128,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
+pnpm verify:images     # SVG/script refusal, type sniffing, count and size bounds (20)
 pnpm verify:authorization  # order privacy, storefront ownership, id guessing (24)
 pnpm verify:rate-limit # OTP flood, IP rotation, dev controls in production (19)
 pnpm verify:socket-auth  # anonymous writes refused, identities not spoofable (15)
@@ -404,6 +405,46 @@ auth: {"demoHeader": false}
 Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
+
+## Listing image validation
+
+Images accepted any string verbatim. Measured before this existed: a script-bearing
+SVG was stored and served back to every visitor, and a **1.5 MB data URI** was
+accepted and echoed on every read.
+
+**Severity, stated precisely.** The SVG did **not** execute — Chrome blocks SVG
+scripting in `<img>`, `<object>` and `<iframe>`, which was measured directly. This
+is *unvalidated input*: a script payload is stored and redistributed, one refactor
+away from being an XSS the moment anything renders a stored value through
+`innerHTML`, a CSS `url()`, or a WebView with scripting on. The size half is an
+unambiguous defect — one listing could carry a payload every client then downloads.
+
+| Rule | Why |
+|---|---|
+| **Bytes are sniffed**, not the declared MIME | a payload claiming `image/png` while containing an SVG is refused |
+| **Scheme is allowlisted** (`http`/`https`/`data:image/*`) | a blocklist of `javascript:` would miss `vbscript:`, `blob:`, `filesystem:` |
+| **SVG refused outright** | the one image format that can carry script; no listing photo needs it |
+| **≤ 20 images, ≤ 3 MB each** | the blueprint's ceiling, and a bound on store inflation |
+| **Duplicates collapsed** | they waste storage and render identically |
+
+Two further defects found while testing: an oversized body reported **500** because
+the parser threw before any handler ran (now `413`, with malformed JSON as `400`),
+and the 2 MB body limit refused a legitimate gallery *before* the validator could
+explain why (raised to 16 MB so the validator is what refuses).
+
+## Delivery is reported honestly
+
+Found while verifying the image work in production: codes are generated and logged
+but **never sent**, because no SMS or email provider is configured. Sign-in cannot
+complete for any real user, and clients were being told to check an inbox that
+would stay empty.
+
+`/api/auth/request` now returns `reachable` (did a message actually go out) and
+`configured` (which channels exist); the boot banner states it plainly, and
+`/api/health` exposes it so an operator sees an unreachable sign-in without reading
+a log. Dev code exposure stays off in production, so it is not worked around by
+leaking codes. **Setting `TWILIO_*` or `RESEND_API_KEY` activates delivery with no
+code change.**
 
 ## Object-level authorization
 
