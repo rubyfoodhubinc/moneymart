@@ -62,7 +62,8 @@
     "verify:delivery": "node scripts/verify-delivery.mjs",
     "verify:lifecycle": "node scripts/verify-lifecycle.mjs",
     "verify:dispute": "node scripts/verify-dispute.mjs",
-    "verify:restart": "node scripts/verify-restart.mjs"
+    "verify:restart": "node scripts/verify-restart.mjs",
+    "verify:concurrency": "node scripts/verify-concurrency.mjs"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

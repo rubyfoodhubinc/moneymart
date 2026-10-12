@@ -151,6 +151,20 @@ export function rateLimit(policy: RateLimitPolicy) {
 
 /* ── Policies ──────────────────────────────────────────────────────────── */
 
+/**
+ * A tunable address ceiling.
+ *
+ * The defaults below are the production posture and stay that way. A verification
+ * suite that needs to create dozens of accounts in one run would otherwise trip
+ * this limiter and fail for a reason unrelated to what it is testing — so the
+ * ceiling is overridable by environment, and only the ceiling. The SUBJECT cap is
+ * deliberately not overridable: that is the one guarding a single inbox or number.
+ */
+const envMax = (name: string, fallback: number): number => {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+};
+
 export const POLICIES = {
   /**
    * Sending a login code. The costliest endpoint: every call can be a billable
@@ -161,7 +175,7 @@ export const POLICIES = {
     // Generous enough for a shared office or mobile carrier NAT, tight enough
     // that a script cannot run up a bill.
     windowMs: 15 * 60 * 1000,
-    max: 20,
+    max: envMax('MM_AUTH_REQUEST_MAX', 20),
     subject: (req: Request) => String((req.body as { identifier?: string } | undefined)?.identifier ?? ''),
     // Far tighter than the address cap: a code is needed once, and the previous
     // one is invalidated on each new request anyway. This is the limit that stops
@@ -177,7 +191,7 @@ export const POLICIES = {
   authVerify: {
     name: 'auth-verify',
     windowMs: 15 * 60 * 1000,
-    max: 30,
+    max: envMax('MM_AUTH_VERIFY_MAX', 30),
     message: 'Too many verification attempts. Wait a few minutes.',
   } satisfies RateLimitPolicy,
 
@@ -215,7 +229,7 @@ export const POLICIES = {
   global: {
     name: 'global',
     windowMs: 60 * 1000,
-    max: 600,
+    max: envMax('MM_GLOBAL_REQUEST_MAX', 600),
     message: 'Request rate exceeded.',
   } satisfies RateLimitPolicy,
 } as const;

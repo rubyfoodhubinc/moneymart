@@ -51,6 +51,11 @@ const SUITES = [
     detail: 'list → bid → settle → pay → escrow → ship → release → books balance',
   },
   {
+    name: 'Concurrency across auctions',
+    script: 'verify-concurrency.mjs',
+    detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',
+  },
+  {
     name: 'Restart with money in flight',
     script: 'verify-restart.mjs',
     detail: 'escrow, disputes and payouts survive a restart; the durability window is measured',
