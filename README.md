@@ -19,7 +19,8 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Studio** (no-code storefront builder) | ✅ Live — block library, theming, inline copy editing, publish |
 | **API** (REST + WebSocket) | ✅ Live on http://127.0.0.1:4317 |
 | **Mobile app** (Expo SDK 53, §5 screen map) | ✅ Live on http://127.0.0.1:8082 (Expo web target) — bundles 940 modules |
-| **Production deployment** | ✅ **Single-origin HTTPS gateway** — web + TV + API + WebSocket on one host |
+| **Production deployment** | ✅ **Live** — https://moneymart-production.up.railway.app |
+| **Repository** | ✅ https://github.com/rubyfoodhubinc/moneymart |
 | **Payments & escrow** | ✅ Provider-abstracted rails + enforced hold/release state machine |
 | **Verification** | ✅ **197 automated checks** across 7 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
@@ -254,6 +255,67 @@ Declines are reproducible on demand (any amount ending `.13`).
 **Buyer-facing UI**: the escrow panel appears on every order in `/account/orders`
 with Pay, Confirm receipt, and Report a problem — plus the full audit trail. The
 wallet shows platform-wide funds held.
+
+## Deployment
+
+### Live now — Railway
+
+**https://moneymart-production.up.railway.app** serves the whole platform from one
+origin, verified by 28 deployment assertions against the live host:
+
+| Path | |
+|---|---|
+| `/` | web SPA with deep-link fallback |
+| `/tv/` | TV / IPTV bundle |
+| `/api` | REST gateway |
+| `/socket.io` | realtime WebSocket — live bidding confirmed (6 bids, current 8450) |
+
+```bash
+pnpm deploy:railway     # build + push the image
+pnpm verify:production  # 28 assertions against the live deployment
+```
+
+The image compiles the API to plain JavaScript (`tsconfig.build.json`) so the
+container runs no TypeScript loader and needs no dev dependencies.
+
+### Runtime configuration
+
+One build targets any backend. The API origin resolves at boot, in order:
+
+1. `/mm-config.json` beside the deployed app — editable after build, so a static
+   host can be re-pointed **without a rebuild**
+2. `?api=<url>` or a stored value, so a tester can switch backends in the browser
+3. `VITE_API_URL`, when explicitly set at build time
+4. the page origin — the unified deployment
+
+Resolution completes before the first render, so no request is ever issued
+against a stale origin. `apps/web/public/mm-config.json` ships the deployed
+default.
+
+### CORS
+
+Split deployments (web on Vercel calling the gateway on Railway) are supported by
+an explicit allowlist rather than `origin: true`, which with credentials would
+reflect *any* Origin. Configure with `MM_ALLOWED_ORIGINS`; `moneymart.app`,
+`www.moneymart.app` and the Railway domain are built in, Vercel preview hostnames
+are allowed, and localhost only outside production. A refused Origin answers
+`403`, not a 500.
+
+### Web on Vercel
+
+`vercel.json` is committed: SPA fallback, immutable asset caching and the same
+security headers the gateway applies. Deploy needs an authenticated CLI:
+
+```bash
+vercel login          # interactive — requires a browser
+vercel --prod
+```
+
+### Custom domain
+
+`www.moneymart.app` → point at the Railway service (or Vercel) and set
+`MM_ALLOWED_ORIGINS` to the final host. The gateway reads `X-Forwarded-Proto`, so
+HSTS is sent whenever TLS terminates at the platform edge.
 
 ## Mobile delivery
 
