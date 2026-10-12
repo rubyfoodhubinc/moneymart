@@ -754,10 +754,37 @@ Three mistakes of mine, recorded:
 
 Both are fixed: settings are applied on every run, and the file is re-synced and compared.
 
-**Honest limit:** sign-in now works up to code entry, but **completing sign-in, placing a
-bid, and the sell flow with its photo picker remain unverified by tap.** Completing
-sign-in needs a gateway that issues a development code, which the deployed one
-deliberately does not.
+### Attempting sign-in and a bid, and reporting exactly how far it gets
+
+`testSignInAndPlaceBid` walks onboarding, types an email, submits the form, asks a local
+gateway for the development code it issued, types the code, then looks for the feed, a lot
+and a bid control. Running it produced real evidence at each step:
+
+- the app reaches the sign-in form and accepts typed input
+- pressing **"Sign in" does request a code** — the gateway logged
+  `[auth] code for ada@moneymart.app: 639326`, so the request left the app and arrived
+- the harness can read the code back and type it
+
+**The plumbing on both sides works.** The run stops at the code-entry transition: the
+screen does not reliably switch modes, so the code was typed into the *email* field
+(`Type '639326' into "you@example.com" TextField`).
+
+I have not diagnosed that transition, so the test **skips unless `MM_UITEST_BID=1`** rather
+than sitting red. **A test that fails for an undiagnosed reason is worse than no test** —
+it trains everyone to ignore a red suite.
+
+Three wrong expectations of mine, found by running it rather than reading it:
+
+- I looked for a **"Send code"** button. The control is **"Sign in"**, which both requests
+  the code and advances to code entry.
+- I typed into `textFields.firstMatch` — the **email** field — as soon as any field
+  existed, instead of waiting for the code box (`000000`).
+- I passed the gateway through the shell environment, which `xcodebuild test` **does not
+  forward**, then through an `.xctestplan`, which changed which bundles xcodebuild
+  considered. It is now a Swift constant generated into the test bundle.
+
+**Honest limit:** completing sign-in, placing a bid, and the sell flow with its photo
+picker **remain unverified by tap.**
 
 ### A CI regression this caused, and its fix
 
