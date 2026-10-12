@@ -7,12 +7,12 @@
 # NEXT_PUBLIC_API_URL at build time (baked into the bundle by Vite).
 set -euo pipefail
 
-ROOT="/Users/rubymacstudio/Documents/deepseek-harness/default-workspace"
-NODE_BIN="/Users/rubymacstudio/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin"
-VITE_BIN="$ROOT/apps/web/node_modules/vite/bin/vite.js"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/runtime.sh"
+ROOT="$MM_ROOT"
+VITE_BIN="$MM_WEB_VITE"
+
 DIST="$ROOT/apps/web/dist"
 
-export PATH="$NODE_BIN:$PATH"
 export NODE_ENV=production
 export NODE_NO_WARNINGS=1
 

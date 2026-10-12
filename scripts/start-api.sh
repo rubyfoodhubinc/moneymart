@@ -3,11 +3,11 @@
 # Auction Engine with hot reload (tsx watch) so every edit lands live.
 set -euo pipefail
 
-ROOT="/Users/rubymacstudio/Documents/deepseek-harness/default-workspace"
-NODE_BIN="/Users/rubymacstudio/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/runtime.sh"
+ROOT="$MM_ROOT"
 TSX="$ROOT/services/api/node_modules/tsx/dist/cli.mjs"
 
-export PATH="$NODE_BIN:$PATH"
+
 export npm_config_cache="$ROOT/.npm-cache"
 export NODE_ENV="${NODE_ENV:-development}"
 export PORT="${PORT:-4317}"

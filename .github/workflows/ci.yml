@@ -1,0 +1,75 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MoneyMart — continuous integration.
+#
+# Runs the release gate on every push and pull request, against an API the gate
+# starts itself. No credentials, database or pre-running server are required, so
+# a fork or a fresh clone gets the same result.
+#
+# The browser suites (UI, HLS) and the mobile bundling suite are excluded because
+# they need a Chromium binary, a dev server and both native platforms; they are
+# runnable on demand and are covered in local runs. This is stated so a green
+# check is not mistaken for full coverage.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow a manual run from the Actions tab.
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes an in-flight run for the same ref.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        # The lockfile is honoured on CI so a dependency change cannot slip in
+        # unreviewed; the local scripts use --no-frozen-lockfile only while
+        # adding packages.
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        # The gate starts the API from its compiled output, so this must run first.
+        run: |
+          pnpm build:api
+          pnpm build:web
+          pnpm build:tv
+
+      - name: Release gate
+        run: node scripts/ci.mjs
+        env:
+          CI: 'true'
+
+      - name: Upload gate logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-failure
+          path: |
+            /tmp/mm_*.log
+          if-no-files-found: ignore
+          retention-days: 7

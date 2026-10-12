@@ -5,11 +5,11 @@
 # which run a standards-based engine. D-pad navigation is handled in-app.
 set -euo pipefail
 
-ROOT="/Users/rubymacstudio/Documents/deepseek-harness/default-workspace"
-NODE_BIN="/Users/rubymacstudio/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin"
-VITE_BIN="$ROOT/apps/tv/node_modules/vite/bin/vite.js"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/runtime.sh"
+ROOT="$MM_ROOT"
+VITE_BIN="$MM_TV_VITE"
 
-export PATH="$NODE_BIN:$PATH"
+
 export npm_config_cache="$ROOT/.npm-cache"
 export NODE_ENV="${NODE_ENV:-development}"
 export NODE_NO_WARNINGS=1

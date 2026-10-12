@@ -7,11 +7,11 @@
 # this machine. See docs/ENVIRONMENT.md.
 set -euo pipefail
 
-ROOT="/Users/rubymacstudio/Documents/deepseek-harness/default-workspace"
-NODE_BIN="/Users/rubymacstudio/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin"
-VITE_BIN="$ROOT/apps/web/node_modules/vite/bin/vite.js"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/runtime.sh"
+ROOT="$MM_ROOT"
+VITE_BIN="$MM_WEB_VITE"
 
-export PATH="$NODE_BIN:$PATH"
+
 export npm_config_cache="$ROOT/.npm-cache"
 export NODE_ENV="${NODE_ENV:-development}"
 # Silence Node's WASI experimental notice (the WASM Tailwind/lightningcss builds use WASI).

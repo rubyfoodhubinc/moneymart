@@ -53,7 +53,9 @@
     "verify:socket-auth": "node scripts/verify-socket-auth.mjs",
     "verify:rate-limit": "node scripts/verify-rate-limit.mjs",
     "verify:authorization": "node scripts/verify-authorization.mjs",
-    "verify:images": "node scripts/verify-images.mjs"
+    "verify:images": "node scripts/verify-images.mjs",
+    "build:api": "pnpm --filter @moneymart/api build",
+    "verify:ci": "node scripts/ci.mjs"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

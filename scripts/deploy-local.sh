@@ -19,13 +19,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-ROOT="/Users/rubymacstudio/Documents/deepseek-harness/default-workspace"
-NODE_BIN="/Users/rubymacstudio/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/runtime.sh"
+ROOT="$MM_ROOT"
 TSX="$ROOT/services/api/node_modules/tsx/dist/cli.mjs"
-VITE="$ROOT/apps/web/node_modules/vite/bin/vite.js"
-VITE_TV="$ROOT/apps/tv/node_modules/vite/bin/vite.js"
+VITE="$MM_WEB_VITE"
+VITE_TV="$MM_TV_VITE"
 
-export PATH="$NODE_BIN:$PATH"
+
 export npm_config_cache="$ROOT/.npm-cache"
 export NODE_NO_WARNINGS=1
 

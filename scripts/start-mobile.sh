@@ -6,11 +6,11 @@
 # Expo project on this machine.
 set -euo pipefail
 
-ROOT="/Users/rubymacstudio/Documents/deepseek-harness/default-workspace"
-NODE_BIN="/Users/rubymacstudio/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/runtime.sh"
+ROOT="$MM_ROOT"
+
 EXPO_BIN="$ROOT/apps/mobile/node_modules/expo/bin/cli"
 
-export PATH="$NODE_BIN:$PATH"
 export npm_config_cache="$ROOT/.npm-cache"
 export NODE_NO_WARNINGS=1
 export EXPO_NO_TELEMETRY=1
