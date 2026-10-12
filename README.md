@@ -33,13 +33,14 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Account settings** | ✅ Preferences persist server-side; data export is a real, scoped download |
 | **Concurrency** | ✅ Overlapping bids, simultaneous settlement and closes verified consistent |
 | **Durability** | ✅ Escrow, disputes and payouts survive a restart; the loss window is measured |
 | **Disputes** | ✅ Admin-only resolution; a refund returns funds, and neither branch can double-pay |
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **666 automated checks** across 23 suites — `pnpm verify:all` |
+| **Verification** | ✅ **703 automated checks** across 24 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -126,7 +127,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  666 passed   0 failed
+  TOTAL  703 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -142,6 +143,7 @@ pnpm verify:lifecycle  # listing → bid → settle → pay → escrow → relea
 pnpm verify:dispute    # admin-only resolution, refund, seller-favourable release (30)
 pnpm verify:restart    # escrow, disputes and payouts across a process restart (33)
 pnpm verify:concurrency # overlapping bids, simultaneous settlement, races a close (25)
+pnpm verify:preferences # settings persist, invalid input refused, export scoped (36)
 pnpm verify:delivery   # the sent code is the verified code; senders and failures (31)
 pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (47)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
@@ -566,6 +568,55 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## Account settings that actually save
+
+I drove the buyer journey on the live product first: browse a lot, sign in, bid, be
+recorded as leader, get the outbid alert, then pay into escrow and confirm receipt.
+**It is complete** — verified in a browser with no console exceptions. What was not
+complete was everything a user changes about *their own account*.
+
+### Two classes of lie, both fixed
+
+**1. Controls that discarded the user's input.** The web settings screen kept
+currency, language, privacy and every notification switch in component **state**,
+and the mobile setup screen's save button was literally `onPress={() => undefined}`.
+There was no endpoint to persist a profile change — so a name, a currency and a set
+of notification choices were all collected and thrown away, while the screen said
+"saved."
+
+`PATCH /api/me` now persists them. Details that matter:
+
+- **The id comes from the session, never the body.** A patch naming another account
+  still applies only to the caller; the named account is untouched.
+- **A refusal reverts the control.** A toggle that stays flipped after a failed save
+  is the same lie as one that never saved.
+- **Validation is exhaustive** — eleven invalid payloads, each refused with a
+  specific reason.
+- **Interests are checked against the platform's own categories**, because free text
+  would be a stored string nothing could ever match.
+
+**2. A promise that could not be kept.** "Export my data" said an archive would
+arrive by email *within 30 days*, and nothing was ever produced — against a right of
+access that NDPR, CCPA, UK GDPR and PIPEDA all grant. `GET /api/me/export` returns
+it immediately as a download, scoped to the caller, with **session tokens and linked
+sign-in identities deliberately excluded** — an archive is a file a user stores and
+emails around.
+
+The three controls that genuinely need a provider — add funds, identity verification,
+account deletion — now **state what is missing** instead of claiming success.
+
+### A guard gap this exposed
+
+`GET /api/me/export` matched the public-read rule **by method**, and the pattern only
+listed `/api/me`. The whole `/api/me*` family is now private, verified in production
+posture: **401** for all three methods, while public reads stay 200.
+
+### Preventing the next one
+
+The browser suite now sweeps seven routes' rendered text for copy that admits a stub
+("opens here", "coming soon", "not yet implemented"), so a placeholder cannot ship
+silently again. That check would have caught the "Message" button two rounds ago.
 
 ## Concurrency across auctions
 
