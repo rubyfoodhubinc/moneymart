@@ -703,11 +703,29 @@ directory, because `ios/` is gitignored: **a test written only inside it would b
 destroyed by the next `expo prebuild`** — the same trap the scene-lifecycle plugin exists
 to avoid. Verified by deleting `ios/` and regenerating.
 
-### It passes
+### Three tests pass
 
-`testOnboardingAdvancesToSignIn` drives the welcome carousel, advances it, continues
-through country selection, and asserts that sign-in renders. **That is the first time a
-tap has been delivered to this app by anything other than a person.**
+`xcodebuild test`: **Executed 3 tests, with 0 failures, in 59 seconds.**
+
+| Test | Time | What it proves |
+|---|---|---|
+| `testOnboardingAdvancesToSignIn` | 7.4 s | carousel → country → sign-in |
+| `testSignedOutLandsOnUsableSignIn` | 8.1 s | sign-in complete: submit control, labelled fields, terms |
+| `testSignInWithDevelopmentCode` | 43.4 s | **typed an email, requested a code, the code field appeared** |
+
+That third one is the sign-in journey every user must complete, and it had **never been
+exercised by a tap** before. It drives the real form end to end up to code entry.
+
+### A test that was asserting my assumption, not the product
+
+`testAppShowsContentSignedOut` demanded that a signed-out user could browse the feed. It
+kept failing, and the element dump showed why: onboarding completes and the app
+**deliberately gates on authentication** — `App.tsx` mounts the tabs only once a session
+exists. Sign-in *is* the intended destination, and the screen was complete. **The old test
+would have passed only if the app had been wrong.**
+
+It is replaced by `testSignedOutLandsOnUsableSignIn`, which asserts what the product
+actually does. A useful test records behaviour; it does not prescribe it.
 
 ### And it found a real accessibility defect
 
@@ -726,9 +744,20 @@ Three mistakes of mine, recorded:
   using the screen's own copy ("Welcome back", "Sign in").
 - A patch left an extra closing brace, failing the Swift compile.
 
-**Honest limit:** `testAppShowsContentSignedOut` does not yet pass — it reaches the
-country screen but not the feed, so signed-out browsing and everything beyond sign-in
-(sign-in itself, bidding, the sell flow) remain unverified by tap.
+### Two script bugs of mine, from the round that created the target
+
+- The setup script returned early when the target existed, so regenerating `ios/` with
+  `expo prebuild` lost `PRODUCT_NAME` and the build failed with *"Multiple commands
+  produce '.../-Runner.app/PlugIns/.xctest'"* — two targets claiming one nameless output.
+- It copied the Swift file only on first creation, so after editing the test in the repo
+  the installed copy went stale and **the run executed the previous test methods.**
+
+Both are fixed: settings are applied on every run, and the file is re-synced and compared.
+
+**Honest limit:** sign-in now works up to code entry, but **completing sign-in, placing a
+bid, and the sell flow with its photo picker remain unverified by tap.** Completing
+sign-in needs a gateway that issues a development code, which the deployed one
+deliberately does not.
 
 ### A CI regression this caused, and its fix
 
