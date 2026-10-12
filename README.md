@@ -413,23 +413,41 @@ Sessions are held in memory and deliberately **not** snapshotted: a snapshot is 
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
 
-## Email delivery: live, with one DNS step outstanding
+## Email delivery: live for real recipients
 
-`RESEND_API_KEY` is configured on the Railway service and **sign-in works**:
+`RESEND_API_KEY` is configured on the Railway service and **sign-in works for
+anyone**, not just a test address:
 
 ```
 /api/health       → auth.delivery: { sms: false, email: true }
 /api/auth/request → delivered: true, transport: resend, reachable: true
+                    for a real address, not only delivered@resend.dev
 ```
 
-One limitation is imposed by Resend, not by the code: **an unverified sending
-domain may only deliver to `delivered@resend.dev`.** A request to any other
-address is refused with `resend_422_validation_error`, and the panel reports that
-reason rather than pretending the message was sent.
+### A wrong conclusion, corrected by testing properly
 
-`moneymart.app` has been added to Resend and is awaiting four DNS records. **The
-domain is served by IONOS nameservers** (`ns1114.ui-dns.com` and friends), not
-Cloudflare, so the records go in the IONOS DNS panel:
+This was first recorded as blocked on DNS. That was **wrong**, and the mistake is
+worth keeping because it was easy to make: the test that "proved" the restriction
+sent to `someone@example.com`, and Resend rejects `example.com` **regardless of the
+sender**. Three separate causes were being conflated, and only isolation told them
+apart:
+
+| Sender | Recipient | Result | What it actually means |
+|---|---|---|---|
+| verified | `delivered@resend.dev` | **200** | sender is fine |
+| unverified `moneymart.app` | `delivered@resend.dev` | **403** | sender is the problem |
+| verified | `example.com` | **422** | recipient is the problem |
+
+So the sending domain must be **verified**, and `example.com` is always refused —
+but any other real address is accepted. `RESEND_FROM` is now set to
+`MoneyMart <codes@mail.everystudio.app>`, a **verified** domain on the account,
+which is why real recipients work today with no DNS change.
+
+### The branded address is a one-variable upgrade
+
+`moneymart.app` is added to Resend but not verified, and **it is served by IONOS
+nameservers** (`ns1114.ui-dns.com` and friends), not Cloudflare. Four records in
+the IONOS DNS panel complete it:
 
 | Type | Name | Value |
 |---|---|---|
@@ -438,10 +456,8 @@ Cloudflare, so the records go in the IONOS DNS panel:
 | TXT | `send` | `v=spf1 include:amazonses.com ~all` |
 | CNAME | `rsend` | `send.forge.rmta.net` |
 
-Once they propagate, `RESEND_FROM` (already set to
-`MoneyMart <codes@moneymart.app>`) begins working with no code change or redeploy.
-Until then, sign-in completes for `delivered@resend.dev` and the failure path is
-reported honestly for everyone else.
+Once they propagate, changing `RESEND_FROM` to `codes@moneymart.app` is the entire
+migration — no code change, no redeploy of anything but a variable.
 
 ## Sign-in code delivery (SMS and email)
 
