@@ -8,6 +8,7 @@ import { Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'reac
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { categories } from '@moneymart/tokens';
 import { Avatar, Body, Button, Card, Display, Pill } from '@/components/ui';
+import * as ImagePicker from 'expo-image-picker';
 import { CameraIcon, CheckIcon, SparkIcon } from '@/components/icons';
 import { colors, radii } from '@/theme';
 import { api } from '@/lib/api';
@@ -44,6 +45,50 @@ export default function ProfileSetupScreen({ navigation, route }: { navigation: 
    */
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [avatar, setAvatar] = useState<string | null>(profile?.avatarUrl ?? null);
+
+  /**
+   * Choose a profile photograph.
+   *
+   * The button was `onPress={() => undefined}` — a no-op beside a hint promising
+   * that background removal would be applied automatically, which was never built.
+   * It now selects a real image, downscaled and encoded the same way listing
+   * photographs are, and saves it through the account endpoint.
+   */
+  const pickAvatar = async () => {
+    setError(null);
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setError('Photo access is needed to choose an image. You can enable it in Settings.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+        base64: true,
+      });
+      if (result.canceled || !result.assets?.length) return;
+
+      const asset = result.assets[0];
+      if (!asset.base64) {
+        setError('That image could not be read. Please try another.');
+        return;
+      }
+      const declared = (asset.mimeType ?? 'image/jpeg').replace('image/jpg', 'image/jpeg');
+      const mimeType = ['image/jpeg', 'image/png', 'image/webp'].includes(declared) ? declared : 'image/jpeg';
+      const dataUri = `data:${mimeType};base64,${asset.base64}`;
+      if (dataUri.length > 3_000_000) {
+        setError('That photo is too large. Try a smaller one.');
+        return;
+      }
+      setAvatar(dataUri);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not open the photo library.');
+    }
+  };
 
   const finish = async () => {
     const proceed = () => {
@@ -65,6 +110,9 @@ export default function ProfileSetupScreen({ navigation, route }: { navigation: 
         // Only send a name that meets the server's rule, so a blank field does not
         // produce a rejection the user cannot act on.
         ...(trimmed.length >= 2 ? { displayName: trimmed } : {}),
+        // Only sent when the user actually chose one, so an unchanged avatar keeps
+        // whatever the account already had.
+        ...(avatar && avatar !== profile?.avatarUrl ? { avatarUrl: avatar } : {}),
         preferences: { notifications: prefs, interests },
       });
       proceed();
@@ -85,17 +133,18 @@ export default function ProfileSetupScreen({ navigation, route }: { navigation: 
 
         {/* Avatar */}
         <View style={styles.avatarRow}>
-          <Avatar name={displayName || 'MoneyMart'} src={profile?.avatarUrl} size={76} isVerified={profile?.isVerified} />
+          <Avatar name={displayName || 'MoneyMart'} src={avatar ?? profile?.avatarUrl} size={76} isVerified={profile?.isVerified} />
           <View style={styles.avatarActions}>
             <Button
               label="Upload photo"
               variant="navy"
               size="sm"
               icon={<CameraIcon size={15} color={colors.ink} />}
-              onPress={() => undefined}
+                onPress={() => void pickAvatar()}
+                loading={saving}
             />
             <Body size={11} color={colors.ink3} style={styles.avatarHint}>
-              Camera or gallery. Background removal is applied automatically.
+                A square photograph works best. It is shown beside your lots and in live rooms.
             </Body>
           </View>
         </View>

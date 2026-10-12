@@ -14,7 +14,7 @@
  *
  * Usage: node scripts/verify-mobile.mjs [--api http://127.0.0.1:4317]
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
 import path from 'node:path';
@@ -259,6 +259,68 @@ loopbackIsPlatformAware
   ? ok('the development fallback is platform-aware, not fixed')
   : bad('the development fallback is platform-aware, not fixed');
 
+/* ── 2c. No control is a dead end ──────────────────────────────────────── */
+
+/**
+ * A button whose handler does nothing is worse than no button: it teaches the
+ * user that the controls are decoration. Two shipped on this app — "Upload photo"
+ * was `onPress={() => undefined}`, and the sell screen's "Add photo" fabricated an
+ * SVG placeholder that the API refuses, so publishing always failed.
+ *
+ * Scanned across the sources, because React Native hides these from a DOM test:
+ * there is no page to query.
+ */
+section('2c. No control is a dead end');
+
+const screenDir = path.join(mobileDir, 'src');
+const sourceFiles = [];
+const walk = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walk(full);
+    else if (/\.tsx?$/.test(entry.name)) sourceFiles.push(full);
+  }
+};
+walk(screenDir);
+
+const noopHandlers = [];
+const stubCopy = [];
+const STUB = /opens here|coming soon|will open|not yet (available|implemented)|applied automatically|background removal/i;
+
+for (const file of sourceFiles) {
+  const text = readFileSync(file, 'utf8');
+  const rel = path.relative(mobileDir, file);
+  /**
+   * A no-op handler is `onPress={() => undefined}` — but the string also appears
+   * in the comments that document having removed one, and a note explaining a fix
+   * is not a shipped control. Line by line, skipping comments.
+   */
+  const NOOP = /on(?:Press|Click)=\{\(\)\s*=>\s*(?:undefined|\{\s*\})\}/;
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
+    if (NOOP.test(line)) {
+      noopHandlers.push(`${rel}:${text.slice(0, text.indexOf(line)).split('\n').length}`);
+      break;
+    }
+  }
+  for (const line of text.split('\n')) {
+    // Ignore comments: a note explaining a removal is not a shipped promise.
+    const trimmed = line.trim();
+    if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
+    const hit = trimmed.match(STUB);
+    if (hit) stubCopy.push(`${rel}: "${hit[0]}"`);
+  }
+}
+
+noopHandlers.length === 0
+  ? ok('no screen wires a control to a no-op', `${sourceFiles.length} files scanned`)
+  : bad('no screen wires a control to a no-op', noopHandlers.join(', '));
+
+stubCopy.length === 0
+  ? ok('no screen promises a feature that does not exist')
+  : bad('no screen promises a feature that does not exist', stubCopy.slice(0, 3).join(' | '));
+
 /* ── 3. Native bundles ─────────────────────────────────────────────────── */
 section('3. Native bundles (iOS + Android)');
 
@@ -328,6 +390,39 @@ if (!plainBundle) {
   bad('a plain bundle could be produced for content inspection');
 } else {
   ok('plain bundle produced for content inspection', `${(plainBundle.length / 1024 / 1024).toFixed(2)} MB`);
+
+  /**
+   * The sell flow must attach a REAL photograph.
+   *
+   * It used to fabricate an SVG placeholder — a gradient with a number in it —
+   * and the API refuses SVG, so every publish from the app failed with
+   * `invalid_images`. The mobile seller flow could not create a listing at all.
+   *
+   * The assertion is deliberately about the FABRICATION, not about the string
+   * `data:image/svg+xml`: React Native's own Image module sniffs that prefix to
+   * decide whether a source is an SVG, so a broad check fails on the framework
+   * rather than on the app. What must be absent is <svg> markup, which is what a
+   * fabricated placeholder actually contains.
+   */
+  const svgMarkup = (plainBundle.match(/<svg[^>]{0,120}/g) ?? []).filter((tag) => /<svg\s+[^>]*viewBox/.test(tag));
+  svgMarkup.length === 0
+    ? ok('the app no longer fabricates SVG placeholder images')
+    : bad('the app no longer fabricates SVG placeholder images', `${svgMarkup.length} inline <svg> template(s) found`);
+
+  // A listing needs at least one real image, so the picker must be reachable and
+  // the fabricated source must be gone from the screen that publishes.
+  !/seed = String\(photos\.length/.test(plainBundle)
+    ? ok('the fabricated photo source is gone from the sell screen')
+    : bad('the fabricated photo source is gone from the sell screen', 'the placeholder generator is still bundled');
+
+  /launchImageLibraryAsync|launchCameraAsync/.test(plainBundle)
+    ? ok('the app captures real photographs', 'gallery and camera')
+    : bad('the app captures real photographs', 'no image picker call found');
+
+  // A listing needs at least one real image, and the picker must be reachable.
+  /expo-image-picker|ImagePicker/.test(plainBundle)
+    ? ok('the image picker is wired into the shipped build')
+    : bad('the image picker is wired into the shipped build');
 
   const screensDir = path.join(mobileDir, 'src', 'screens');
   const screens = execFileSync('ls', [screensDir], { encoding: 'utf8' }).trim().split('\n').filter((f) => f.endsWith('.tsx'));

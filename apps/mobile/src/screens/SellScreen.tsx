@@ -24,6 +24,7 @@ import {
   StatBlock,
   styles as ui,
 } from '@/components/ui';
+import * as ImagePicker from 'expo-image-picker';
 import { CameraIcon, CheckIcon, GavelIcon, GlobeIcon, ShieldIcon, SparkIcon, StoreIcon, TrendIcon } from '@/components/icons';
 import { api } from '@/lib/api';
 import { buyersPremiumRate, formatMoney, pct, round2 } from '@/lib/format';
@@ -80,11 +81,83 @@ export default function SellScreen({ navigation }: { navigation: any }) {
     (step === 4 && price > 0) ||
     step === 5;
 
-  const addPhoto = () => {
-    const seed = String(photos.length + 1).padStart(2, '0');
-    const color = photos.length % 2 === 0 ? '#F5A623' : '#00D4A1';
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 450"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0D1B2A"/><stop offset="100%" stop-color="${color}"/></linearGradient></defs><rect width="600" height="450" fill="url(#g)"/><text x="300" y="245" text-anchor="middle" font-family="Inter, sans-serif" font-size="72" font-weight="700" fill="#FFFFFF" fill-opacity="0.14">${seed}</text></svg>`;
-    setPhotos((current) => [...current, `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`]);
+  /**
+   * Take or choose a real photograph.
+   *
+   * This used to FABRICATE an SVG placeholder — a gradient with a number in the
+   * corner — and attach that as the listing image. Two things were wrong with it.
+   * It was not a photograph of anything, and the API refuses SVG outright, so
+   * every publish from the app failed with `invalid_images`. The mobile seller
+   * flow could not create a listing at all, and the placeholder made that look
+   * like a deliberate demo rather than a fault.
+   *
+   * Images are downscaled and compressed before encoding: a modern phone camera
+   * produces several megabytes, and the API accepts 3 MB of RAW bytes per image,
+   * which is roughly 4 MB once base64 adds its third.
+   */
+  const addPhoto = async (source: 'library' | 'camera') => {
+    setNotice(null);
+    try {
+      const permission =
+        source === 'camera'
+          ? await ImagePicker.requestCameraPermissionsAsync()
+          : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setNotice(
+          source === 'camera'
+            ? 'Camera access is needed to photograph your item. You can enable it in Settings.'
+            : 'Photo access is needed to choose images. You can enable it in Settings.',
+        );
+        return;
+      }
+
+      const result =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync({
+              mediaTypes: ['images'],
+              quality: 0.7,
+              allowsEditing: true,
+              aspect: [4, 3],
+              // base64 so the upload is a self-contained data URI: the API accepts
+              // those, and it avoids a second round trip to a storage service that
+              // is not configured.
+              base64: true,
+            })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ['images'],
+              quality: 0.7,
+              allowsMultipleSelection: false,
+              base64: true,
+              exif: false,
+            });
+
+      if (result.canceled || !result.assets?.length) return;
+
+      const asset = result.assets[0];
+      if (!asset.base64) {
+        setNotice('That image could not be read. Please try another.');
+        return;
+      }
+
+      /**
+       * The declared type must match the bytes or the API refuses it, and the
+       * picker reports `image/jpg` as often as `image/jpeg`.
+       */
+      const declared = (asset.mimeType ?? 'image/jpeg').replace('image/jpg', 'image/jpeg');
+      const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+      const mimeType = allowed.includes(declared) ? declared : 'image/jpeg';
+
+      const dataUri = `data:${mimeType};base64,${asset.base64}`;
+      // The ceiling is on raw bytes; base64 inflates by about a third.
+      if (dataUri.length > 3_000_000) {
+        setNotice('That photo is too large. Try a smaller one or lower the resolution.');
+        return;
+      }
+
+      setPhotos((current) => (current.length >= 20 ? current : [...current, dataUri]));
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : 'Could not open the photo library.');
+    }
   };
 
   const publish = async () => {
@@ -273,17 +346,23 @@ export default function SellScreen({ navigation }: { navigation: any }) {
                   </Pressable>
                 </View>
               ))}
-              {photos.length < 20 ? (
-                <Pressable onPress={addPhoto} style={[styles.photoCell, styles.photoAdd]}>
-                  <CameraIcon size={20} color={colors.ink3} />
-                  <Body size={10.5} color={colors.ink3} style={styles.photoAddLabel}>
-                    Add photo
-                  </Body>
-                </Pressable>
-              ) : null}
-            </View>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Pressable onPress={() => void addPhoto('camera')} style={[styles.photoCell, styles.photoAdd]}>
+                    <CameraIcon size={18} color={colors.ink3} />
+                    <Body size={10.5} color={colors.ink3} style={styles.photoAddLabel}>
+                      Camera
+                    </Body>
+                  </Pressable>
+                  <Pressable onPress={() => void addPhoto('library')} style={[styles.photoCell, styles.photoAdd]}>
+                    <SparkIcon size={18} color={colors.ink3} />
+                    <Body size={10.5} color={colors.ink3} style={styles.photoAddLabel}>
+                      Gallery
+                    </Body>
+                  </Pressable>
+                </View>
+              </View>
             <Body size={11} color={colors.ink3} style={styles.stepHint}>
-              {photos.length} of 20 added. On device this uses Expo Image Picker with AI background removal.
+              {photos.length} of 20 added, up to 3 MB each. A clear photograph against a plain background sells fastest.
             </Body>
           </>
         ) : null}

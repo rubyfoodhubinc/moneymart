@@ -48,7 +48,8 @@
       "favicon": "./assets/icon.png"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      "expo-image-picker"
     ],
     "experiments": {
       "typedRoutes": false
