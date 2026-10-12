@@ -524,9 +524,23 @@ app.get('/api/config', (_req, res) => {
 
 /* ── REST: session / users ─────────────────────────────────────────────── */
 
-app.get('/api/session', (_req, res) => {
-  const user = users.get(store.db.session.userId);
-  res.json({ user, profile: publicProfile(store.db.session.userId) });
+/**
+ * Who the caller is.
+ *
+ * Resolved through `actorId`, so it answers for a bearer token rather than only
+ * the development session. Returning 401 when nothing resolves is what lets a
+ * client tell "signed out" from "signed in as nobody" — the previous version
+ * always answered 200 with whatever the store held, which a client cannot
+ * distinguish from a real session.
+ */
+app.get('/api/session', (req, res) => {
+  const userId = actorId(req);
+  const user = userId ? users.get(userId) : undefined;
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated', user: null, profile: null });
+    return;
+  }
+  res.json({ user, profile: publicProfile(userId) });
 });
 
 /**

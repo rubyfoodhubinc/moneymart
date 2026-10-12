@@ -23,6 +23,7 @@ import type {
 } from '@moneymart/types';
 
 import { apiOrigin } from '@/lib/config';
+import { authHeaders, clearToken } from '@/lib/token';
 
 /**
  * API origin for the current session.
@@ -56,6 +57,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     cache: 'no-store',
     headers: {
       'content-type': 'application/json',
+      // Carries the session token when one is held. Spread after the caller's
+      // headers would let a caller override auth, so it goes first and the
+      // explicit headers win only for non-authorization keys.
+      ...authHeaders(),
       ...(init?.headers ?? {}),
     },
   });
@@ -65,6 +70,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     payload = await response.json();
   } catch {
     payload = null;
+  }
+
+  /**
+   * A 401 on a request that carried a token means the session is gone — expired,
+   * revoked, or invalidated by a server restart. Clearing it here means the UI
+   * falls back to signed-out immediately instead of retrying forever with a dead
+   * credential.
+   */
+  if (response.status === 401 && authHeaders().authorization) {
+    clearToken();
   }
 
   if (!response.ok) {
@@ -198,6 +213,36 @@ export const api = {
     }>('/api/config'),
 
   session: () => request<SessionResponse>('/api/session'),
+
+  /** Passwordless sign-in (§9.1 Auth Service). */
+  requestCode: (identifier: string) =>
+    request<{
+      ok: boolean;
+      challengeId: string;
+      kind: 'email' | 'phone';
+      destination: string;
+      expiresInSeconds: number;
+      delivery: { delivered: boolean; transport: string; detail?: string };
+      /** Present only when development code exposure is enabled. */
+      devCode?: string;
+    }>('/api/auth/request', { method: 'POST', body: JSON.stringify({ identifier }) }),
+
+  verifyCode: (identifier: string, code: string) =>
+    request<{
+      ok: boolean;
+      token: string;
+      expiresAt: string;
+      user: User;
+      profile: PublicProfile;
+      needsProfile: boolean;
+    }>('/api/auth/verify', { method: 'POST', body: JSON.stringify({ identifier, code }) }),
+
+  authSession: () =>
+    request<{ ok: boolean; user: User; profile: PublicProfile; session: { createdAt: string; expiresAt: string } }>(
+      '/api/auth/session',
+    ),
+
+  signOut: () => request<{ ok: boolean; revoked: boolean }>('/api/auth/signout', { method: 'POST' }),
   switchUser: (userId: string) =>
     request<SessionResponse>('/api/session', { method: 'POST', body: JSON.stringify({ userId }) }),
   users: () => request<PublicProfile[]>('/api/users'),

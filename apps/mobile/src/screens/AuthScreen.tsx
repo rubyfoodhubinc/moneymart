@@ -18,15 +18,11 @@ import { Body, Button, Card, Data, Display, Pill } from '@/components/ui';
 import { CheckIcon, GlobeIcon, ShieldIcon } from '@/components/icons';
 import { colors, fonts, radii } from '@/theme';
 import { useSession } from '@/store/session';
-import { api } from '@/lib/api';
 
 type Mode = 'signin' | 'signup' | 'otp';
 
 export default function AuthScreen({ navigation }: { navigation: any }) {
   const insets = useSafeAreaInsets();
-  const users = useSession((state) => state.users);
-  const switchUser = useSession((state) => state.switchUser);
-
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -40,10 +36,27 @@ export default function AuthScreen({ navigation }: { navigation: any }) {
   const passwordValid = password.length >= 8;
   const canSubmit = mode === 'otp' ? otp.length === 6 : emailValid && passwordValid;
 
-  const startOtp = () => {
+  const requestCode = useSession((state) => state.requestCode);
+  const verifyCode = useSession((state) => state.verifyCode);
+  const pending = useSession((state) => state.pending);
+
+  /**
+   * Send a code.
+   *
+   * The previous version switched to the OTP screen locally and accepted any six
+   * digits — the code was never requested from or checked by the server, so the
+   * "verification" was theatre. It now asks the API and only advances once the
+   * request succeeded.
+   */
+  const startOtp = async () => {
+    setError(null);
+    setBusy(true);
+    const identifier = mode === 'otp' ? (pending?.identifier ?? email.trim()) : email.trim();
+    const sent = await requestCode(identifier);
+    setBusy(false);
+    if (!sent) return;
     setMode('otp');
     setSecondsLeft(60);
-    setError(null);
     const timer = setInterval(() => {
       setSecondsLeft((value) => {
         if (value <= 1) {
@@ -55,41 +68,38 @@ export default function AuthScreen({ navigation }: { navigation: any }) {
     }, 1000);
   };
 
-  const finish = async (userId: string) => {
-    setBusy(true);
-    try {
-      await switchUser(userId);
-      navigation.navigate('ProfileSetup');
-    } catch {
-      setError('Could not complete sign-in. Check that the MoneyMart API is reachable.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const submit = async () => {
     setError(null);
+
     if (mode === 'otp') {
-      if (otp !== '123456' && otp.length !== 6) {
+      if (otp.length !== 6) {
         setError('Enter the 6-digit code we sent you.');
         return;
       }
-      const fallback = users[0];
-      if (fallback) await finish(fallback.id);
+      setBusy(true);
+      const accepted = await verifyCode(otp);
+      setBusy(false);
+      if (!accepted) {
+        setOtp('');
+        setError(useSession.getState().error ?? 'That code was not accepted.');
+        return;
+      }
+      // The token is stored by the store; onboarding continues from here.
+      navigation.navigate('ProfileSetup');
       return;
     }
+
     if (!emailValid) {
       setError('Enter a valid email address.');
       return;
     }
-    if (!passwordValid) {
-      setError('Passwords must be at least 8 characters.');
-      return;
-    }
-    // Demo auth: the API's dev session endpoint stands in for Firebase Auth.
-    const match = users.find((entry) => entry.handle && email.toLowerCase().includes(entry.handle));
-    const target = match ?? users.find((entry) => entry.handle === 'ashvale') ?? users[0];
-    if (target) await finish(target.id);
+
+    /**
+     * Passwordless: a valid address is enough to start. The password field is
+     * retained for continuity but no longer gates entry, because no password is
+     * ever set on the account.
+     */
+    await startOtp();
   };
 
   return (
@@ -208,15 +218,20 @@ export default function AuthScreen({ navigation }: { navigation: any }) {
               <View style={styles.dividerLine} />
             </View>
 
+            {/*
+              Social sign-in is not connected. It previously signed the user in as
+              a hard-coded demo account, which is a fabricated identity assertion
+              rather than authentication. Disabled and labelled honestly until a
+              provider is wired.
+            */}
             <View style={styles.ssoRow}>
               {['Google', 'Apple', 'Facebook'].map((provider) => (
                 <Pressable
                   key={provider}
-                  onPress={() => {
-                    const fallback = users.find((entry) => entry.handle === 'ashvale') ?? users[0];
-                    if (fallback) void finish(fallback.id);
-                  }}
-                  style={styles.ssoButton}
+                  disabled
+                  accessibilityState={{ disabled: true }}
+                  onPress={() => setError(`${provider} sign-in is not connected yet. Use an email or phone code.`)}
+                  style={[styles.ssoButton, { opacity: 0.4 }]}
                 >
                   <Body size={12.5} weight="semibold" color={colors.ink}>
                     {provider}

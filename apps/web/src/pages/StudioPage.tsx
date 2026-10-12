@@ -50,6 +50,7 @@ import {
 } from '@/lib/storefront';
 import { useDragReorder, DragItem, DragHandleGlyph, reorder } from '@/components/DragReorder';
 import { useSession } from '@/store/session';
+import { SignInPanel } from '@/components/SignInPanel';
 import { formatMoney } from '@/lib/format';
 
 export default function StudioPage() {
@@ -219,11 +220,18 @@ export default function StudioPage() {
   if (!user) {
     return (
       <Section>
-        <EmptyState
-          title="Sign in to open Studio"
-          body="Studio is where creators build their MoneyMart storefront. Switch to a creator identity from the account menu to try it."
-          icon={<StoreIcon size={22} />}
-        />
+        <div className="mx-auto max-w-[420px] py-10">
+          <div className="mb-4 flex flex-col items-center gap-2 text-center">
+            <StoreIcon size={22} />
+            <h2 className="text-[17px] font-semibold text-white">Sign in to open Studio</h2>
+            <p className="max-w-[46ch] text-[12.5px] leading-relaxed text-white/55">
+              Studio is where creators build their MoneyMart storefront. Your shop is tied to your account, so we need
+              to know who you are before you start building.
+            </p>
+          </div>
+          {/* The real flow, rather than a pointer to the development switcher. */}
+          <SignInPanel />
+        </div>
       </Section>
     );
   }

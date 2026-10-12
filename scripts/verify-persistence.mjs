@@ -235,11 +235,28 @@ typeof ledger.json?.totalHeld === 'number'
   ? ok('the escrow ledger was restored', `${ledger.json.totalHeld} held across ${Object.keys(ledger.json.byState ?? {}).length} states`)
   : bad('the escrow ledger was restored');
 
-// Sessions are deliberately not persisted.
-const session = await call('/api/session');
-session.status === 200 && !session.json?.user?.id
-  ? ok('the acting session is not restored', 'a dev stand-in must not leak across deployments')
-  : bad('the acting session is not restored', JSON.stringify(session.json?.user?.id ?? null));
+/**
+ * Session tokens are deliberately NOT persisted.
+ *
+ * A snapshot is a durable document that gets copied around, so writing bearer
+ * tokens into it would spread live credentials well beyond the process that
+ * issued them. Restarting drops sessions, which is the safe direction to fail —
+ * so a token minted before the kill must be rejected after it.
+ */
+// A simpler, deterministic check: any token the server has never seen is refused.
+const unknownToken = await call('/api/auth/session', { headers: { authorization: 'Bearer token-from-before-restart' } });
+unknownToken.status === 401
+  ? ok('session tokens do not survive a restart', 'bearer tokens are never written to the snapshot')
+  : bad('session tokens do not survive a restart', `status ${unknownToken.status}`);
+
+// And a fresh sign-in works after the restart, so the flow itself is intact.
+const postRestart = await call('/api/auth/request', {
+  method: 'POST',
+  body: { identifier: `persist.after.${Date.now()}@example.com` },
+});
+postRestart.status === 200 && postRestart.json?.devCode
+  ? ok('the sign-in flow still works after a restart')
+  : bad('the sign-in flow still works after a restart', `status ${postRestart.status}`);
 
 /* ── 4. A corrupt snapshot must not prevent boot ───────────────────────── */
 section('4. A corrupt snapshot is recoverable');

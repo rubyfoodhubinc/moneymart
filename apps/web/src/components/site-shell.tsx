@@ -19,6 +19,7 @@ import {
 } from '@/components/icons';
 import { useNotifications } from '@/lib/hooks';
 import { useSession } from '@/store/session';
+import { SignInPanel } from '@/components/SignInPanel';
 import { formatAge } from '@/lib/format';
 
 const NAV_LINKS = [
@@ -37,7 +38,7 @@ export function SiteHeader() {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
-  const { user, profile, users, switchUser } = useSession();
+  const { user, profile, users, switchUser, status, signOut } = useSession();
   const notifications = useNotifications();
 
   useEffect(() => {
@@ -167,6 +168,7 @@ export function SiteHeader() {
           <button
             type="button"
             onClick={() => setMenuOpen((value) => !value)}
+            aria-expanded={menuOpen}
             className="flex items-center gap-2 rounded-[11px] border border-white/10 bg-white/[0.035] py-1.5 pl-1.5 pr-3 transition-colors hover:border-[var(--mm-gold-line)]"
           >
             <Avatar
@@ -177,7 +179,11 @@ export function SiteHeader() {
               ring={false}
             />
             <span className="hidden text-[12.5px] font-medium text-white/85 sm:block">
-              {profile?.displayName?.split(' ')[0] ?? 'Sign in'}
+              {/* While the stored token is being checked, say so rather than
+                  claiming the visitor is signed out. */}
+              {status === 'loading'
+                ? '…'
+                : (profile?.displayName?.split(' ')[0] ?? 'Sign in')}
             </span>
             {user?.isPro ? <Pill tone="gold">PRO</Pill> : null}
           </button>
@@ -187,6 +193,16 @@ export function SiteHeader() {
       {menuOpen ? (
         <div className="mm-container">
           <div className="animate-scale-in glass mb-4 rounded-[16px] p-3 shadow-[0_28px_70px_rgba(0,0,0,0.55)]">
+            {/* Signed out: the menu is the sign-in flow, not a list of links a
+                guest cannot use. */}
+            {status === 'anonymous' ? (
+              <div className="p-2">
+                <SignInPanel onDone={() => setMenuOpen(false)} />
+              </div>
+            ) : null}
+
+            {status === 'authenticated' ? (
+              <>
             <div className="grid gap-1 sm:grid-cols-2">
               <AccountLink href="/account" icon={<UserIcon size={16} />} label="My account" />
               <AccountLink href="/account/wallet" icon={<WalletIcon size={16} />} label="Wallet & payouts" />
@@ -196,9 +212,27 @@ export function SiteHeader() {
               <AccountLink href="/studio" icon={<HomeIcon size={16} />} label="Storefront Studio" />
             </div>
 
+            <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3" style={{ borderColor: 'var(--mm-divider)' }}>
+              <span className="px-1 text-[11.5px] text-white/45">
+                Signed in as {profile?.handle ? `@${profile.handle}` : (user?.email ?? 'your account')}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  void signOut().then(() => setMenuOpen(false));
+                }}
+                className="rounded-full border px-3 py-1.5 text-[11.5px] font-semibold transition-colors"
+                style={{ borderColor: 'rgba(255,255,255,0.14)', color: 'rgba(255,255,255,0.75)' }}
+              >
+                Sign out
+              </button>
+            </div>
+
+            {/* Development-only: the demo header the API refuses in production. */}
+            {users.length ? (
             <div className="mt-3 border-t pt-3" style={{ borderColor: 'var(--mm-divider)' }}>
               <p className="mb-2 px-1 text-[10px] font-bold uppercase tracking-[0.16em] text-white/40">
-                Demo identity — switch bidder
+                Demo identity — development only
               </p>
               <div className="flex flex-wrap gap-2">
                 {users.slice(0, 6).map((candidate) => (
@@ -219,6 +253,9 @@ export function SiteHeader() {
                 ))}
               </div>
             </div>
+            ) : null}
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}

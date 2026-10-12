@@ -26,6 +26,7 @@ export default function SettingsPage() {
   const user = useSession((state) => state.user);
   const profile = useSession((state) => state.profile);
   const switchUser = useSession((state) => state.switchUser);
+  const signOut = useSession((state) => state.signOut);
   const users = useSession((state) => state.users);
 
   const [language, setLanguage] = useState('English');
@@ -225,6 +226,41 @@ export default function SettingsPage() {
           </div>
         </Card>
       </div>
+
+      {/* ── Session ───────────────────────────────────────────────────── */}
+      <Card className="mt-5 p-5">
+        <h3 className="mb-1.5 flex items-center gap-2 text-[16px] text-white">
+          <ShieldIcon size={16} /> Session
+        </h3>
+        <p className="mb-4 text-[12.5px] leading-relaxed text-white/55">
+          {profile ? (
+            <>
+              Signed in as <span className="text-white/85">{profile.displayName}</span>
+              {profile.handle ? <> · @{profile.handle}</> : null}
+              {user?.email ? <> · {user.email}</> : null}. Signing out revokes this device's session token; any other
+              device stays signed in.
+            </>
+          ) : (
+            'You are not signed in. Sign in from the account menu to bid, sell or manage payouts.'
+          )}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            disabled={!profile}
+            onClick={() => {
+              void signOut().then(() => {
+                setMessage('Signed out. This device’s session token has been revoked.');
+              });
+            }}
+          >
+            Sign out
+          </Button>
+          <span className="text-[11.5px] text-white/40">
+            Passwordless — there is no password stored for this account.
+          </span>
+        </div>
+      </Card>
 
       <p className="mt-6 text-[11.5px] leading-relaxed text-white/35">
         Compliance architecture: NDPR (Nigeria) · CCPA (California) · UK GDPR & Data Protection Act 2018 · PIPEDA and

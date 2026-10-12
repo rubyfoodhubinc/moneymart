@@ -18,6 +18,17 @@ import { existsSync } from 'node:fs';
 const args = process.argv.slice(2);
 const flagIndex = (name) => args.indexOf(name);
 const URL_BASE = flagIndex('--url') >= 0 ? args[flagIndex('--url') + 1] : (process.env.UI_URL ?? 'http://127.0.0.1:3000');
+/**
+ * The API origin the app itself uses.
+ *
+ * Vite does NOT proxy /api, so it must be called directly. This mirrors the
+ * client's own precedence — an explicit VITE_API_URL wins over the deployed
+ * mm-config.json — which is why a local dev server still talks to a local API
+ * even though the config file names production.
+ */
+const API_BASE = (
+  flagIndex('--api') >= 0 ? args[flagIndex('--api') + 1] : (process.env.API_URL ?? 'http://127.0.0.1:4317')
+).replace(/\/$/, '');
 const OVERALL_TIMEOUT_MS = flagIndex('--timeout') >= 0 ? Number(args[flagIndex('--timeout') + 1]) : 75_000;
 const CDP_PORT = 9344;
 
@@ -228,6 +239,46 @@ meaningful.length === 0
 /* ── 2. Studio drag affordances ────────────────────────────────────────── */
 section('2. Studio section reordering');
 
+/**
+ * Studio is account-scoped, so a signed-out browser cannot reach the canvas.
+ * Sign in for real first and stash the token, which is exactly what the app
+ * does — then every authenticated surface below is exercised in the state a
+ * creator would actually be in.
+ */
+async function signInForTests() {
+  const identifier = `uitest.${Date.now()}@example.com`;
+  const requested = await fetch(`${API_BASE}/api/auth/request`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identifier }),
+  }).then((r) => r.json());
+  if (!requested?.devCode) return { ok: false, reason: 'no dev code' };
+  const verified = await fetch(`${API_BASE}/api/auth/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identifier, code: requested.devCode }),
+  }).then((r) => r.json());
+  if (!verified?.token) return { ok: false, reason: 'no token' };
+  await evaluate(`(() => {
+    localStorage.setItem('mm:token', ${JSON.stringify(verified.token)});
+    localStorage.setItem('mm:tokenExpiry', String(Date.parse(${JSON.stringify(verified.expiresAt)})));
+  })()`);
+  return { ok: true, userId: verified.user?.id, token: verified.token };
+}
+
+const resolvedApi = await evaluate(`(async () => {
+  const session = await fetch(${JSON.stringify(API_BASE)} + '/api/health').then((r) => r.json()).catch(() => null);
+  return session ? 'reachable' : 'unreachable';
+})()`);
+resolvedApi === 'reachable'
+  ? ok('the API the app targets is reachable', API_BASE)
+  : bad('the API the app targets is reachable', API_BASE);
+
+const signedIn = await signInForTests();
+signedIn.ok
+  ? ok('a session token can be established for the authenticated checks', signedIn.userId)
+  : bad('a session token can be established for the authenticated checks', signedIn.reason);
+
 await goto('/studio');
 // Wait for the canvas to finish loading the storefront document.
 for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -299,8 +350,208 @@ if (keyboard.skipped) {
     : bad('the reorder preserved every section exactly once', `${before.length} → ${after.length}`);
 }
 
-/* ── 4. Sell flow photo drag ───────────────────────────────────────────── */
-section('4. Sell flow photo reordering');
+/* ── 4. Passwordless sign-in UI (§9.1) ─────────────────────────────────── */
+section('4. Sign-in flow');
+
+/**
+ * Start genuinely signed out.
+ *
+ * The drag checks above sign in to reach an account-scoped canvas, so the token
+ * must be cleared and the app reloaded — otherwise this section would test the
+ * signed-in shell and silently pass without exercising the sign-in path.
+ */
+await goto('/');
+await evaluate("(() => { try { localStorage.removeItem('mm:token'); localStorage.removeItem('mm:tokenExpiry'); } catch (e) {} })()");
+await goto('/');
+
+const opened = await evaluate(`(() => {
+  const button = [...document.querySelectorAll('button')].find((b) => /sign in|^…$/i.test((b.textContent || '').trim()));
+  if (!button) return false;
+  button.click();
+  return true;
+})()`);
+opened ? ok('the account menu opens') : bad('the account menu opens');
+
+await new Promise((resolve) => setTimeout(resolve, 500));
+
+const panel = await evaluate(`(() => {
+  const text = document.body.innerText;
+  return {
+    hasHeading: /Sign in to MoneyMart/i.test(text),
+    hasIdentifierField: [...document.querySelectorAll('input')].some((i) => /example\.com|phone/i.test(i.placeholder || '')),
+    hasSendButton: [...document.querySelectorAll('button')].some((b) => /send code/i.test(b.textContent || '')),
+    mentionsNoPassword: /no password/i.test(text),
+  };
+})()`);
+
+panel.hasHeading ? ok('the sign-in panel renders') : bad('the sign-in panel renders');
+panel.hasIdentifierField ? ok('it offers an email or phone field') : bad('it offers an email or phone field');
+panel.hasSendButton ? ok('it offers a send-code action') : bad('it offers a send-code action');
+panel.mentionsNoPassword ? ok('it tells the user no password is involved') : bad('it tells the user no password is involved');
+
+/**
+ * Complete a real sign-in against the live API.
+ *
+ * The development server exposes the code in the response, which is what makes
+ * an end-to-end check possible without a mail or SMS account.
+ */
+/**
+ * Confirm the raw API response carries the development code BEFORE exercising
+ * the UI. If it does not, a UI failure would be misreported as a panel bug.
+ */
+const apiCode = await evaluate(`(async () => {
+  const response = await fetch(${JSON.stringify(API_BASE)} + '/api/auth/request', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identifier: 'rawcheck.' + Date.now() + '@example.com' }),
+  });
+  const body = await response.json().catch(() => null);
+  return { status: response.status, devCode: body && body.devCode ? body.devCode : null, delivery: body && body.delivery ? body.delivery.transport : null };
+})()`);
+apiCode.devCode
+  ? ok('the API exposes a development code for the UI check', `${apiCode.devCode} via ${apiCode.delivery}`)
+  : bad('the API exposes a development code for the UI check', `status ${apiCode.status}`);
+
+/**
+ * Record the API response the panel receives.
+ *
+ * Reading the code from the DOM proved brittle — the region is nested and the
+ * code sits in its own element — and it also tests the panel's markup rather
+ * than the flow. Wrapping `fetch` captures exactly what the API returned to the
+ * panel's own request, which is unambiguous.
+ */
+await evaluate(`(() => {
+  if (window.__mmCapture) return;
+  const original = window.fetch;
+  window.__mmCapture = {};
+  window.fetch = async function (input, init) {
+    const response = await original.apply(this, arguments);
+    try {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (url.includes('/api/auth/request')) {
+        const clone = response.clone();
+        const body = await clone.json();
+        if (body && body.devCode) window.__mmCapture.devCode = body.devCode;
+      }
+    } catch (e) { /* recording must never break the request */ }
+    return response;
+  };
+})()`);
+
+const signIn = await evaluate(`(async () => {
+  const setValue = (input, value) => {
+    // React tracks its own value, so assign through the native setter or the
+    // framework never sees the change.
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const byText = (node, re) => re.test((node.textContent || '').trim());
+
+  const identifier = 'verifyui.' + Date.now() + '@example.com';
+  const field = [...document.querySelectorAll('input')].find((i) => /example\.com|phone/i.test(i.placeholder || ''));
+  if (!field) return { step: 'no-field' };
+
+  setValue(field, identifier);
+  // React commits the value asynchronously; clicking in the same tick can submit
+  // an empty string.
+  await new Promise((r) => setTimeout(r, 200));
+
+  const send = [...document.querySelectorAll('button')].find((b) => byText(b, /send code/i));
+  if (!send) return { step: 'no-send-button' };
+  send.click();
+
+  /**
+   * Wait for the CODE, not the heading.
+   *
+   * The code step renders before the request resolves, so waiting on the heading
+   * returns while the panel is still in flight and the code element does not
+   * exist yet — which is how this check failed while the feature worked.
+   */
+  let code = null;
+  for (let i = 0; i < 80; i += 1) {
+    await new Promise((r) => setTimeout(r, 150));
+    code = (window.__mmCapture && window.__mmCapture.devCode) || null;
+    if (code) break;
+  }
+  if (!code) {
+    return { step: 'no-code', headingSeen: /Enter your code/i.test(document.body.innerText) };
+  }
+
+  const codeField = [...document.querySelectorAll('input')].find((i) => (i.placeholder || '') === '000000');
+  if (!codeField) return { step: 'no-code-field', code };
+  setValue(codeField, code);
+  await new Promise((r) => setTimeout(r, 200));
+
+  const verify = [...document.querySelectorAll('button')].find((b) => byText(b, /^verify$/i));
+  if (!verify) return { step: 'no-verify-button', code };
+  verify.click();
+
+  for (let i = 0; i < 80; i += 1) {
+    await new Promise((r) => setTimeout(r, 150));
+    if (localStorage.getItem('mm:token')) break;
+  }
+  return { step: 'done', code, token: localStorage.getItem('mm:token') };
+})()`);
+
+signIn.step === 'done' && signIn.token
+  ? ok('a code can be requested and redeemed through the UI', `code ${signIn.code}`)
+  : bad('a code can be requested and redeemed through the UI', JSON.stringify(signIn).slice(0, 160));
+
+signIn.token
+  ? ok('the session token is persisted')
+  : bad('the session token is persisted');
+
+if (signIn.token) {
+  const resolved = await evaluate(`(async () => {
+    const response = await fetch(${JSON.stringify(API_BASE)} + '/api/session', {
+      headers: { authorization: 'Bearer ' + localStorage.getItem('mm:token') },
+    });
+    const body = await response.json().catch(() => ({}));
+    return { status: response.status, userId: body && body.user ? body.user.id : null };
+  })()`);
+  resolved.status === 200 && resolved.userId
+    ? ok('the stored token authenticates against the API', resolved.userId)
+    : bad('the stored token authenticates against the API', `status ${resolved.status}`);
+
+  /**
+   * Sign out from the Settings page.
+   *
+   * The header menu is a toggle whose contents depend on auth state, and driving
+   * it was unreliable. Settings is also where a session control genuinely
+   * belongs, so the check follows the product rather than fighting the chrome.
+   */
+  await goto('/account/settings');
+  const settingsHasControl = await evaluate(
+    "[...document.querySelectorAll('button')].some((b) => /sign out/i.test(b.textContent || ''))",
+  );
+  settingsHasControl ? ok('a sign-out control is offered in Settings') : bad('a sign-out control is offered in Settings');
+
+  if (settingsHasControl) {
+    const signOut = await evaluate(`(async () => {
+      const token = localStorage.getItem('mm:token');
+      const button = [...document.querySelectorAll('button')].find((b) => /sign out/i.test(b.textContent || ''));
+      button.click();
+      for (let i = 0; i < 60; i += 1) {
+        await new Promise((r) => setTimeout(r, 150));
+        if (!localStorage.getItem('mm:token')) break;
+      }
+      // Confirm the server no longer honours the token either.
+      const check = await fetch(${JSON.stringify(API_BASE)} + '/api/session', {
+        headers: { authorization: 'Bearer ' + token },
+      }).catch(() => ({ status: 0 }));
+      return { cleared: !localStorage.getItem('mm:token'), revoked: check.status === 401 };
+    })()`);
+
+    signOut.cleared ? ok('signing out clears the stored token') : bad('signing out clears the stored token');
+    signOut.revoked
+      ? ok('signing out revokes the token server-side')
+      : bad('signing out revokes the token server-side');
+  }
+}
+
+/* ── 5. Sell flow photo drag ───────────────────────────────────────────── */
+section('5. Sell flow photo reordering');
 
 await goto('/sell');
 // Walk to the photo step: pick a format, then continue until photos appear.

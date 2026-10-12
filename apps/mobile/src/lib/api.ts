@@ -40,10 +40,31 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The session token, held in memory for the life of the process.
+ *
+ * Mobile has no equivalent of an httpOnly cookie, so the token is persisted in
+ * AsyncStorage by the session store and handed here. Keeping the module free of a
+ * store import avoids a cycle, for the same reason the web client does.
+ */
+let sessionToken: string | null = null;
+
+export function setSessionToken(token: string | null): void {
+  sessionToken = token;
+}
+
+export function getSessionToken(): string | null {
+  return sessionToken;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      'content-type': 'application/json',
+      ...(sessionToken ? { authorization: `Bearer ${sessionToken}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
 
   let payload: unknown = null;
@@ -96,6 +117,28 @@ function qs(params: Record<string, string | number | undefined>): string {
 
 export const api = {
   session: () => request<{ user: User | null; profile: PublicProfile }>('/api/session'),
+
+  /** Passwordless sign-in (§9.1). */
+  requestCode: (identifier: string) =>
+    request<{
+      ok: boolean;
+      kind: 'email' | 'phone';
+      destination: string;
+      expiresInSeconds: number;
+      delivery: { delivered: boolean; transport: string; detail?: string };
+      devCode?: string;
+    }>('/api/auth/request', { method: 'POST', body: JSON.stringify({ identifier }) }),
+
+  verifyCode: (identifier: string, code: string) =>
+    request<{ ok: boolean; token: string; expiresAt: string; user: User; profile: PublicProfile }>(
+      '/api/auth/verify',
+      { method: 'POST', body: JSON.stringify({ identifier, code }) },
+    ),
+
+  authSession: () =>
+    request<{ ok: boolean; user: User; profile: PublicProfile }>('/api/auth/session'),
+
+  signOut: () => request<{ ok: boolean; revoked: boolean }>('/api/auth/signout', { method: 'POST' }),
   switchUser: (userId: string) =>
     request<{ user: User | null; profile: PublicProfile }>('/api/session', {
       method: 'POST',
