@@ -3,6 +3,19 @@ packages:
   - "packages/*"
   - "services/*"
 
+# Hoisted node_modules.
+#
+# pnpm 11 reads this from the workspace file, not from .npmrc — where the setting
+# sat unnoticed and had no effect, leaving the isolated (symlinked) layout in place.
+#
+# React Native needs a flat layout: its CocoaPods podspecs compute header search
+# paths RELATIVE to the package directory, so a store path like
+# `.pnpm/react-native@0.79.6_<peer-hash>/node_modules/react-native/ReactCommon/yoga`
+# puts the Yoga headers where the generated xcconfig never looks, and the native
+# build fails with `'yoga/algorithm/Cache.h' file not found`. Next.js needs it too,
+# for its optional platform/SWC binaries.
+nodeLinker: hoisted
+
 # pnpm v11 build-script approvals. esbuild is required by tsx (API hot reload).
 allowBuilds:
   esbuild: true

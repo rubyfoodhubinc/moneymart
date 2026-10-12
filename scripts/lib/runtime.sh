@@ -42,8 +42,32 @@ export npm_config_cache="${npm_config_cache:-$MM_ROOT/.npm-cache}"
 export NODE_NO_WARNINGS="${NODE_NO_WARNINGS:-1}"
 
 # The workspace's own scripts, resolved from the root rather than hardcoded.
-MM_WEB_VITE="$MM_ROOT/apps/web/node_modules/vite/bin/vite.js"
-MM_TV_VITE="$MM_ROOT/apps/tv/node_modules/vite/bin/vite.js"
+#
+# A binary may live in the package's own node_modules or be hoisted to the repo
+# root, depending on the linker layout in pnpm-workspace.yaml. Resolving both means
+# the launchers do not break when that setting changes — which it did, when the
+# node linker was switched to `hoisted` so React Native's CocoaPods podspecs could
+# compute their header paths.
+mm_resolve() {
+  local first="$1"
+  shift
+  if [ -f "$first" ]; then
+    printf '%s' "$first"
+    return
+  fi
+  local candidate
+  for candidate in "$@"; do
+    if [ -f "$candidate" ]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  # Nothing found: return the first path so the failure names something concrete.
+  printf '%s' "$first"
+}
+
+MM_WEB_VITE="$(mm_resolve "$MM_ROOT/apps/web/node_modules/vite/bin/vite.js" "$MM_ROOT/node_modules/vite/bin/vite.js")"
+MM_TV_VITE="$(mm_resolve "$MM_ROOT/apps/tv/node_modules/vite/bin/vite.js" "$MM_ROOT/node_modules/vite/bin/vite.js")"
 MM_API_ENTRY="$MM_ROOT/services/api/dist/services/api/src/index.js"
 export MM_WEB_VITE MM_TV_VITE MM_API_ENTRY
 

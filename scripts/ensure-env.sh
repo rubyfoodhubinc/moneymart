@@ -29,6 +29,14 @@ echo "────────────────────────�
 
 # ── 1. Rollup: native binding → WebAssembly ─────────────────────────────────
 ROLLUP_DIR="$(ls -d "$PNPM_STORE"/rollup@*/node_modules/rollup 2>/dev/null | head -1 || true)"
+# Rollup may sit in the pnpm store (isolated layout) or directly in the root
+# node_modules (hoisted). Looking only in the store silently does nothing under a
+# hoisted layout, and Vite then dies with ERR_DLOPEN_FAILED on
+# @rollup/rollup-darwin-arm64 — found only after the node linker was switched so
+# React Native's CocoaPods podspecs could resolve their header paths.
+if [ -z "${ROLLUP_DIR:-}" ] && [ -d "$ROOT/node_modules/rollup/dist" ]; then
+  ROLLUP_DIR="$ROOT/node_modules/rollup"
+fi
 if [ -n "${ROLLUP_DIR:-}" ] && [ -d "$ROLLUP_DIR/dist" ]; then
   DIST="$ROLLUP_DIR/dist"
   if [ ! -f "$DIST/native.native-backup.js" ] && [ -f "$DIST/native.js" ] && ! grep -q "MoneyMart environment patch" "$DIST/native.js" 2>/dev/null; then
@@ -106,6 +114,13 @@ fi
 
 # ── 2. Lightning CSS: native addon → WebAssembly ────────────────────────────
 LC_DIR="$(ls -d "$PNPM_STORE"/lightningcss@[0-9]*/node_modules/lightningcss 2>/dev/null | head -1 || true)"
+# Same two layouts as rollup: the store under an isolated linker, the root
+# node_modules under a hoisted one. A store-only lookup silently skips the patch
+# and Tailwind then fails with
+#   Loading PostCSS Plugin failed: Cannot find module '../lightningcss.darwin-arm64.node'
+if [ -z "${LC_DIR:-}" ] && [ -d "$ROOT/node_modules/lightningcss" ]; then
+  LC_DIR="$ROOT/node_modules/lightningcss"
+fi
 if [ -n "${LC_DIR:-}" ] && [ -d "$LC_DIR/node" ]; then
   if [ ! -f "$LC_DIR/node/index.native-backup.js" ] && [ -f "$LC_DIR/node/index.js" ] && ! grep -q "MoneyMart environment shim" "$LC_DIR/node/index.js" 2>/dev/null; then
     cp "$LC_DIR/node/index.js" "$LC_DIR/node/index.native-backup.js"
@@ -127,7 +142,10 @@ fi
 
 # ── 3. Tailwind Rust scanner: ensure the WASI fallback is present ───────────
 if [ -d "$ROOT/node_modules/.pnpm" ]; then
-  if ! ls -d "$PNPM_STORE"/@tailwindcss+oxide-wasm32-wasi@* >/dev/null 2>&1; then
+  # Either layout: a store entry under the isolated linker, a root package under
+  # the hoisted one.
+  if ! ls -d "$PNPM_STORE"/@tailwindcss+oxide-wasm32-wasi@* >/dev/null 2>&1 \
+     && [ ! -d "$ROOT/node_modules/@tailwindcss/oxide-wasm32-wasi" ]; then
     say "NOTE: @tailwindcss/oxide-wasm32-wasi missing."
     say "      Run: pnpm --filter @moneymart/web add -D @tailwindcss/oxide-wasm32-wasi lightningcss-wasm @rollup/wasm-node"
   else
