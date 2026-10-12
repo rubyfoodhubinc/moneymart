@@ -178,12 +178,30 @@ export default function StreamScreen({ route, navigation }: { route: any; naviga
 
           <View style={styles.videoTopRight}>
             <LiveBadge viewers={room.viewerCount || stream.viewerCount} />
-            <Pill tone="green">
-              <CheckIcon size={10} color={colors.green} />
-              <Body size={9.5} weight="semibold" color={colors.green}>
-                {auctionRoom.connected ? 'Realtime' : 'Reconnecting'}
-              </Body>
-            </Pill>
+            {/**
+              * Report the ROOM's connection, and only claim a fault when there is one.
+              *
+              * This read `auctionRoom.connected`. A room between lots has no active
+              * auction, so that hook is handed no id, never connects, and the badge sat
+              * on "Reconnecting" indefinitely on a room whose realtime connection was
+              * perfectly healthy — it read as a fault while nothing was wrong.
+              *
+              * With nothing live to bid on there is also nothing to say about realtime,
+              * so the badge states the actual situation instead.
+              */}
+            {activeAuction ? (
+              <Pill tone={room.connected ? 'green' : 'neutral'}>
+                <Body size={9.5} weight="semibold" color={room.connected ? colors.green : colors.ink2}>
+                  {room.connected ? 'Realtime' : 'Connecting'}
+                </Body>
+              </Pill>
+            ) : (
+              <Pill tone="neutral">
+                <Body size={9.5} weight="semibold" color={colors.ink2}>
+                  Between lots
+                </Body>
+              </Pill>
+            )}
           </View>
         </View>
 

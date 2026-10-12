@@ -222,6 +222,16 @@ export function useStreamRoom(streamId?: string, seed?: { viewerCount?: number; 
   const [messages, setMessages] = useState<ChatMessage[]>(seed?.messages ?? []);
   const [pinned, setPinned] = useState<ChatMessage | null>(null);
   const [activeAuctionId, setActiveAuctionId] = useState<string | undefined>(undefined);
+  /**
+   * The ROOM's own connection, as distinct from the auction room's.
+   *
+   * The stream screen displayed `auctionRoom.connected` for its "Realtime /
+   * Reconnecting" badge. A room between lots has no active auction, so that hook is
+   * handed no id and never connects — leaving the badge permanently reading
+   * "Reconnecting" on a room whose realtime connection was perfectly healthy. This
+   * tracks the socket the room actually uses.
+   */
+  const [connected, setConnected] = useState(getSocket().connected);
 
   useEffect(() => {
     if (seed?.viewerCount !== undefined) setViewerCount(seed.viewerCount);
@@ -251,17 +261,26 @@ export function useStreamRoom(streamId?: string, seed?: { viewerCount?: number; 
       if (payload.streamId === streamId) setActiveAuctionId(payload.auctionId);
     };
 
-    socket.on('connect', onConnect);
+    const onConnected = () => {
+      setConnected(true);
+      onConnect();
+    };
+    const onDisconnected = () => setConnected(false);
+
+    socket.on('connect', onConnected);
+    socket.on('disconnect', onDisconnected);
     socket.on('stream:viewers', onViewers);
     socket.on('chat:message', onMessage);
     socket.on('chat:pin', onPin);
     socket.on('stream:item', onItem);
 
-    if (socket.connected) onConnect();
+    if (socket.connected) onConnected();
+    else setConnected(false);
 
     return () => {
       socket.emit('stream:leave', streamId);
-      socket.off('connect', onConnect);
+      socket.off('connect', onConnected);
+      socket.off('disconnect', onDisconnected);
       socket.off('stream:viewers', onViewers);
       socket.off('chat:message', onMessage);
       socket.off('chat:pin', onPin);
@@ -282,7 +301,7 @@ export function useStreamRoom(streamId?: string, seed?: { viewerCount?: number; 
     [streamId],
   );
 
-  return { viewerCount, messages, pinned, activeAuctionId, send };
+  return { viewerCount, messages, pinned, activeAuctionId, connected, send };
 }
 
 /** Watchlist held in memory for the session (server-side lists land in Phase 2). */

@@ -392,6 +392,68 @@ if (!existsSync(pluginPath)) {
     : bad('the new Swift file is added to the Xcode target');
 }
 
+/* ── 2e. The stream room plays video, and claims only real faults ──────── */
+
+section('2e. Stream room playback and status');
+
+const streamScreen = readFileSync(path.join(mobileDir, 'src', 'screens', 'StreamScreen.tsx'), 'utf8');
+const streamHooks = readFileSync(path.join(mobileDir, 'src', 'lib', 'hooks.ts'), 'utf8');
+const hlsComponent = existsSync(path.join(mobileDir, 'src', 'components', 'HlsVideo.tsx'))
+  ? readFileSync(path.join(mobileDir, 'src', 'components', 'HlsVideo.tsx'), 'utf8')
+  : '';
+
+/**
+ * The room must use the server-resolved playback source.
+ *
+ * It previously rendered the lot's poster inside an `Image` and never touched
+ * `playback` at all, so on mobile the room could only ever show a still while web and
+ * TV played video.
+ */
+/playback=\{stream\.playback\}/.test(streamScreen) && /HlsVideo/.test(streamScreen)
+  ? ok('the stream room renders the resolved playback source', 'HlsVideo')
+  : bad('the stream room renders the resolved playback source', 'no HlsVideo wired to stream.playback');
+
+/useVideoPlayer/.test(hlsComponent)
+  ? ok('the player uses expo-video')
+  : bad('the player uses expo-video');
+
+// A failed player must fall back to the poster, never a black rectangle.
+/posterUrl/.test(hlsComponent) && /status === 'error'/.test(hlsComponent)
+  ? ok('a failed manifest falls back to the poster')
+  : bad('a failed manifest falls back to the poster');
+
+/**
+ * The status badge must reflect the ROOM's connection.
+ *
+ * It read `auctionRoom.connected`. A room between lots has no active auction, so that
+ * hook is handed no id and never connects, leaving the badge stuck on "Reconnecting"
+ * on a healthy room — it read as a fault while nothing was wrong. Asserted on the
+ * source so the wrong hook cannot be reintroduced.
+ */
+/**
+ * Comment-aware: the note explaining this removal quotes the very expression being
+ * forbidden, and a comment is not a shipped control. Only real code counts.
+ */
+const badgeCode = streamScreen
+  .split('\n')
+  .filter((line) => {
+    const trimmed = line.trim();
+    return !trimmed.startsWith('*') && !trimmed.startsWith('//') && !trimmed.startsWith('/*');
+  })
+  .join('\n');
+
+!/auctionRoom\.connected/.test(badgeCode)
+  ? ok('the status badge does not read the auction room connection')
+  : bad('the status badge does not read the auction room connection', 'auctionRoom.connected is back in code');
+
+/room\.connected/.test(streamScreen) && /connected, send \}/.test(streamHooks)
+  ? ok('the stream hook tracks and exposes its own connection')
+  : bad('the stream hook tracks and exposes its own connection');
+
+/Between lots/.test(streamScreen)
+  ? ok('a room between lots says so, rather than implying a fault')
+  : bad('a room between lots says so, rather than implying a fault');
+
 /* ── 3. Native bundles ─────────────────────────────────────────────────── */
 section('3. Native bundles (iOS + Android)');
 
