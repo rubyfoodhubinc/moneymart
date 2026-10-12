@@ -27,6 +27,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { CameraIcon, CheckIcon, GavelIcon, GlobeIcon, ShieldIcon, SparkIcon, StoreIcon, TrendIcon } from '@/components/icons';
 import { api } from '@/lib/api';
+import { canAddImage, prepareImage } from '@/lib/images';
 import { buyersPremiumRate, formatMoney, pct, round2 } from '@/lib/format';
 import { colors, radii } from '@/theme';
 import { useSession } from '@/store/session';
@@ -133,28 +134,24 @@ export default function SellScreen({ navigation }: { navigation: any }) {
 
       if (result.canceled || !result.assets?.length) return;
 
-      const asset = result.assets[0];
-      if (!asset.base64) {
-        setNotice('That image could not be read. Please try another.');
-        return;
-      }
-
       /**
-       * The declared type must match the bytes or the API refuses it, and the
-       * picker reports `image/jpg` as often as `image/jpeg`.
+       * The asset-to-data-URI conversion is shared with the account setup screen
+       * and tested against the real API. It is where the failures actually happen:
+       * a mismatched MIME type, `image/jpg`, or base64 pushing a file over the
+       * ceiling.
        */
-      const declared = (asset.mimeType ?? 'image/jpeg').replace('image/jpg', 'image/jpeg');
-      const allowed = ['image/jpeg', 'image/png', 'image/webp'];
-      const mimeType = allowed.includes(declared) ? declared : 'image/jpeg';
-
-      const dataUri = `data:${mimeType};base64,${asset.base64}`;
-      // The ceiling is on raw bytes; base64 inflates by about a third.
-      if (dataUri.length > 3_000_000) {
-        setNotice('That photo is too large. Try a smaller one or lower the resolution.');
+      const prepared = prepareImage(result.assets[0]);
+      if (!prepared.ok) {
+        setNotice(prepared.reason);
         return;
       }
 
-      setPhotos((current) => (current.length >= 20 ? current : [...current, dataUri]));
+      if (!canAddImage(photos.length)) {
+        setNotice('A listing can carry twenty photographs.');
+        return;
+      }
+
+      setPhotos((current) => [...current, prepared.value]);
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : 'Could not open the photo library.');
     }

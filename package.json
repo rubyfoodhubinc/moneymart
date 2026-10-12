@@ -64,7 +64,8 @@
     "verify:dispute": "node scripts/verify-dispute.mjs",
     "verify:restart": "node scripts/verify-restart.mjs",
     "verify:concurrency": "node scripts/verify-concurrency.mjs",
-    "verify:preferences": "node scripts/verify-preferences.mjs"
+    "verify:preferences": "node scripts/verify-preferences.mjs",
+    "verify:mobile-photos": "node scripts/verify-mobile-photos.mjs"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

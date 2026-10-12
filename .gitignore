@@ -51,3 +51,12 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# ── Expo prebuild output ────────────────────────────────────────────────────
+# The native projects are GENERATED from app.json and its config plugins by
+# `expo prebuild`, so they are build artifacts rather than sources. Committing them
+# would freeze a particular prebuild's output — including generated Podfiles and
+# project settings — and hide the fact that the real configuration lives in
+# app.json. Regenerate with `pnpm --filter @moneymart/mobile prebuild`.
+apps/mobile/ios/
+apps/mobile/android/

@@ -12,6 +12,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { CameraIcon, CheckIcon, SparkIcon } from '@/components/icons';
 import { colors, radii } from '@/theme';
 import { api } from '@/lib/api';
+import { prepareImage } from '@/lib/images';
 import { useSession } from '@/store/session';
 
 const NOTIFICATION_TYPES = [
@@ -72,19 +73,12 @@ export default function ProfileSetupScreen({ navigation, route }: { navigation: 
       });
       if (result.canceled || !result.assets?.length) return;
 
-      const asset = result.assets[0];
-      if (!asset.base64) {
-        setError('That image could not be read. Please try another.');
+      const prepared = prepareImage(result.assets[0]);
+      if (!prepared.ok) {
+        setError(prepared.reason);
         return;
       }
-      const declared = (asset.mimeType ?? 'image/jpeg').replace('image/jpg', 'image/jpeg');
-      const mimeType = ['image/jpeg', 'image/png', 'image/webp'].includes(declared) ? declared : 'image/jpeg';
-      const dataUri = `data:${mimeType};base64,${asset.base64}`;
-      if (dataUri.length > 3_000_000) {
-        setError('That photo is too large. Try a smaller one.');
-        return;
-      }
-      setAvatar(dataUri);
+      setAvatar(prepared.value);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not open the photo library.');
     }

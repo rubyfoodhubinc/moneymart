@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "expo start",
     "dev:web": "expo start --web",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "export:native": "expo export --platform ios --platform android --output-dir .export",
     "export:ios": "expo export --platform ios --output-dir .export",

@@ -51,6 +51,11 @@ const SUITES = [
     detail: 'list → bid → settle → pay → escrow → ship → release → books balance',
   },
   {
+    name: 'Mobile photo capture',
+    script: 'verify-mobile-photos.mjs',
+    detail: 'the picker-to-API conversion, verified against the real validator',
+  },
+  {
     name: 'Account preferences & export',
     script: 'verify-preferences.mjs',
     detail: 'changes persist, invalid input refused, export is real and scoped',

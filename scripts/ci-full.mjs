@@ -56,6 +56,7 @@ const API_SUITES = [
   'verify-restart.mjs',
   'verify-concurrency.mjs',
   'verify-preferences.mjs',
+  'verify-mobile-photos.mjs',
 ];
 
 /**
