@@ -488,8 +488,37 @@ const signIn = await evaluate(`(async () => {
     return { step: 'no-code', headingSeen: /Enter your code/i.test(document.body.innerText) };
   }
 
+  /**
+   * Snapshot the code step WHILE it is on screen.
+   *
+   * Reading it after sign-in completes finds the panel already unmounted, which
+   * failed two assertions while the copy was correct.
+   */
+  const stepSnapshot = (() => {
+    const text = document.body.innerText;
+    const buttons = [...document.querySelectorAll('button')].map((b) => (b.textContent || '').trim());
+    const delivered = text.includes('We sent a 6-digit code');
+    return {
+      onCodeStep: /Enter your code/i.test(text),
+      deliveredHeadline: delivered,
+      honestWhenUndelivered: delivered ? true : /A 6-digit code was generated/i.test(text),
+      resendOffered: buttons.some((label) => /resend/i.test(label)),
+      // Only a genuine "no provider at all" is silent; a refusal names its reason.
+      failureExplained: /Delivery failed \\(|No email or SMS provider/i.test(text),
+      failureDetail: (/Delivery failed \\(([^)]+)\\)/.exec(text) || [])[1] || '',
+      spamHint: /spam folder/i.test(text),
+      /**
+       * Normalise before matching: the rendered text contains non-breaking and
+       * narrow spaces, so a plain whitespace class is not enough on its own. An
+       * earlier version
+       * matched the literal string and failed while the copy was correct.
+       */
+      expiryStated: text.replace(/[^\x20-\x7E]/g, ' ').includes('expires in '),
+    };
+  })();
+
   const codeField = [...document.querySelectorAll('input')].find((i) => (i.placeholder || '') === '000000');
-  if (!codeField) return { step: 'no-code-field', code };
+  if (!codeField) return { step: 'no-code-field', code, codeStep: stepSnapshot };
   setValue(codeField, code);
   await new Promise((r) => setTimeout(r, 200));
 
@@ -501,12 +530,64 @@ const signIn = await evaluate(`(async () => {
     await new Promise((r) => setTimeout(r, 150));
     if (localStorage.getItem('mm:token')) break;
   }
-  return { step: 'done', code, token: localStorage.getItem('mm:token') };
+  return { step: 'done', code, token: localStorage.getItem('mm:token'), codeStep: stepSnapshot };
 })()`);
 
 signIn.step === 'done' && signIn.token
   ? ok('a code can be requested and redeemed through the UI', `code ${signIn.code}`)
   : bad('a code can be requested and redeemed through the UI', JSON.stringify(signIn).slice(0, 160));
+
+/**
+ * The code step's copy and affordances.
+ *
+ * A code that never arrives is the most common sign-in problem, so the panel must
+ * offer a way to send another one and say where to look. Whether these appear
+ * depends on a message actually having gone out, so the assertion is written
+ * against the delivery state rather than assuming a configured provider.
+ */
+const codeStep = signIn.codeStep ?? { onCodeStep: false, deliveredHeadline: false, honestWhenUndelivered: false, resendOffered: false, spamHint: false, expiryStated: false };
+
+codeStep.deliveredHeadline
+  ? ok('a delivered code says a message was sent')
+  : codeStep.honestWhenUndelivered
+    ? ok('with no provider it does not claim a message was sent')
+    : bad('the headline matches whether a message was sent');
+
+/**
+ * Asserted for BOTH branches: the headline differs, but the expiry is always
+ * stated. An earlier version only looked for it after a successful send, so it
+ * failed on the undelivered branch where the panel was correct.
+ */
+codeStep.expiryStated
+  ? ok('the code step states when the code expires')
+  : bad('the code step states when the code expires');
+
+/**
+ * When a send was attempted and refused, the panel must say so AND name the
+ * reason — a silent failure would leave the user waiting for a message that is
+ * never coming.
+ */
+if (!codeStep.deliveredHeadline) {
+  codeStep.failureExplained
+    ? ok('a refused send is explained to the user', String(codeStep.failureDetail).slice(0, 40))
+    : bad('a refused send is explained to the user');
+}
+
+codeStep.onCodeStep ? ok('the code step was on screen to inspect') : bad('the code step was on screen to inspect');
+
+if (codeStep.deliveredHeadline) {
+  codeStep.resendOffered
+    ? ok('a delivered code offers a resend')
+    : bad('a delivered code offers a resend');
+  codeStep.spamHint
+    ? ok('the panel suggests checking the spam folder')
+    : bad('the panel suggests checking the spam folder');
+} else {
+  // No provider: resending into a void would only burn the rate limit.
+  !codeStep.resendOffered
+    ? ok('no resend is offered when nothing can be delivered')
+    : bad('no resend is offered when nothing can be delivered', 'a void resend is offered');
+}
 
 signIn.token
   ? ok('the session token is persisted')

@@ -31,6 +31,23 @@ export function SignInPanel({ onDone }: { onDone?: () => void }) {
   const [providers, setProviders] = useState<{ id: string; label: string; configured: boolean }[]>([]);
   const [socialBusy, setSocialBusy] = useState<string | null>(null);
 
+  /**
+   * Resend cooldown, in seconds.
+   *
+   * A code that never arrives is the most common sign-in problem, so a resend must
+   * exist. The API allows five per identifier per fifteen minutes, so the button is
+   * held back for a minute at a time — long enough for a slow message to land, and
+   * short enough to be useful. Offering a resend the API will refuse would be worse
+   * than not offering one.
+   */
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setInterval(() => setCooldown((seconds) => (seconds <= 1 ? 0 : seconds - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldown]);
+
   useEffect(() => {
     let cancelled = false;
     void api
@@ -80,6 +97,19 @@ export function SignInPanel({ onDone }: { onDone?: () => void }) {
     if (!sent) return;
     setStep('code');
     setCode('');
+    setCooldown(60);
+  };
+
+  /** Send again to the address already in flight, without leaving the code step. */
+  const resendCode = async () => {
+    if (!pending || cooldown > 0) return;
+    setNotice(null);
+    const sent = await requestCode(pending.identifier);
+    if (!sent) return;
+    setCode('');
+    setCooldown(60);
+    setNotice(`A new code is on its way to ${pending.destination}. The previous one no longer works.`);
+    codeInput.current?.focus();
   };
 
   const submitCode = async () => {
@@ -105,9 +135,23 @@ export function SignInPanel({ onDone }: { onDone?: () => void }) {
           <span className="text-[13px] font-semibold text-white">Enter your code</span>
         </div>
 
+        {/*
+          The headline must match reality. Saying "we sent a code" and only then
+          admitting nothing was sent contradicts itself in consecutive sentences —
+          which is what this did before.
+        */}
         <p className="mb-3 text-[12.5px] leading-relaxed text-white/60">
-          We sent a 6-digit code to <span className="text-white/90">{pending.destination}</span>. It expires in{' '}
-          {Math.round(pending.expiresInSeconds / 60)} minutes.
+          {pending.delivery.delivered ? (
+            <>
+              We sent a 6-digit code to <span className="text-white/90">{pending.destination}</span>. It expires in{' '}
+              {Math.round(pending.expiresInSeconds / 60)} minutes.
+            </>
+          ) : (
+            <>
+              A 6-digit code was generated for <span className="text-white/90">{pending.destination}</span>. It expires
+              in {Math.round(pending.expiresInSeconds / 60)} minutes.
+            </>
+          )}
         </p>
 
         {/* Say plainly when no message was actually sent, rather than implying one was. */}
@@ -160,7 +204,23 @@ export function SignInPanel({ onDone }: { onDone?: () => void }) {
           >
             Use a different address
           </Button>
+          {/* Only offered when a message actually went out: resending into a void
+              would just burn the rate limit. */}
+          {pending.delivery.delivered ? (
+            <Button variant="ghost" loading={busy} disabled={cooldown > 0} onClick={() => void resendCode()}>
+              {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend code'}
+            </Button>
+          ) : null}
         </div>
+
+        {/* The usual reason a delivered code is not found, said before the user
+            concludes the platform is broken. */}
+        {pending.delivery.delivered && step === 'code' ? (
+          <p className="mt-2 text-[11.5px] leading-relaxed text-white/40">
+            Nothing yet? Check your spam folder — codes sometimes land there. The code stays valid for{' '}
+            {Math.round(pending.expiresInSeconds / 60)} minutes.
+          </p>
+        ) : null}
 
         {notice ? <p className="mt-2 text-[12px] text-white/60">{notice}</p> : null}
         {error ? <p className="mt-2 text-[12px]" style={{ color: '#FF8080' }}>{error}</p> : null}
