@@ -48,6 +48,7 @@ import {
   type StoreTheme,
   type Storefront as StorefrontDoc,
 } from '@/lib/storefront';
+import { useDragReorder, DragItem, DragHandleGlyph, reorder } from '@/components/DragReorder';
 import { useSession } from '@/store/session';
 import { formatMoney } from '@/lib/format';
 
@@ -101,6 +102,38 @@ export default function StudioPage() {
 
   const blocks = doc?.blocks ?? [];
   const selected = blocks.find((block) => block.id === selectedId) ?? null;
+
+  /**
+   * Move a block by index. The drag interaction works in indices because it
+   * resolves the drop slot geometrically; the arrow buttons keep their id-based
+   * signature below and delegate here.
+   */
+  const moveBlockTo = (from: number, to: number) => {
+    setDoc((current) => {
+      if (!current) return current;
+      const next = reorder(current.blocks, from, to);
+      // `reorder` returns the original array when the move is a no-op or out of
+      // range, so compare by reference to avoid marking a clean document dirty.
+      return next === current.blocks ? current : { ...current, blocks: next };
+    });
+  };
+
+  /**
+   * Section-level drag reordering.
+   *
+   * Driven by the FULL ordered list, not the visible subset. Hidden blocks keep
+   * their slot, so hiding one and dragging another cannot silently reorder the
+   * document behind the creator's back. Each rendered block carries its true
+   * index for exactly that reason.
+   */
+  const blockDrag = useDragReorder({
+    count: blocks.length,
+    onMove: moveBlockTo,
+    describe: (index) => {
+      const label = blocks[index]?.kind ?? 'block';
+      return `Reorder ${label}, position ${index + 1} of ${blocks.length}. Use the arrow keys to move it.`;
+    },
+  });
   const lots = loaded.data?.lots ?? [];
   const profile = loaded.data?.profile;
   const stream = loaded.data?.stream;
@@ -457,43 +490,76 @@ export default function StudioPage() {
                   </Button>
                 </div>
               ) : (
-                blocks
-                  .filter((block) => block.visible)
-                  .map((block) => (
-                    <div
-                      key={block.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedId(block.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') setSelectedId(block.id);
-                      }}
-                      className="relative cursor-pointer outline-none transition-all"
-                      style={{
-                        boxShadow:
-                          block.id === selectedId ? `inset 0 0 0 2px ${theme?.accent}` : 'inset 0 0 0 1px transparent',
-                      }}
-                    >
-                      {block.id === selectedId ? (
-                        <span
-                          className="absolute right-2 top-2 z-10 rounded-full px-2 py-[3px] text-[10px] font-bold uppercase tracking-wider"
-                          style={{ background: theme?.accent, color: '#0D1B2A' }}
+                /*
+                 * Drag container. The ref must wrap exactly the reorderable
+                 * items, in order — the hook measures these children directly to
+                 * resolve the drop slot, because block heights differ sharply
+                 * (a hero is far taller than a stats row).
+                 */
+                <div ref={blockDrag.containerRef}>
+                  {blocks.map((block, index) =>
+                    !block.visible ? null : (
+                      <DragItem key={block.id} index={index} state={blockDrag}>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedId(block.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') setSelectedId(block.id);
+                          }}
+                          className="group relative cursor-pointer outline-none transition-all"
+                          style={{
+                            boxShadow:
+                              block.id === selectedId
+                                ? `inset 0 0 0 2px ${theme?.accent}`
+                                : 'inset 0 0 0 1px transparent',
+                          }}
                         >
-                          Editing
-                        </span>
-                      ) : null}
-                      <BlockRenderer
-                        block={block}
-                        accent={theme?.accent ?? '#F5A623'}
-                        radius={RADIUS_SCALE[theme?.radius ?? 'soft']}
-                        density={DENSITY_SCALE[theme?.density ?? 'comfortable']}
-                        lots={lots}
-                        profile={profile}
-                        streamTitle={stream?.title}
-                        streamId={stream?.id}
-                      />
-                    </div>
-                  ))
+                          {/*
+                            Grab handle. A dedicated handle rather than the whole
+                            card, so clicking to edit copy never starts a drag.
+                            Keyboard-operable, so dragging is never the only way
+                            to move a section.
+                          */}
+                          <button
+                            type="button"
+                            {...blockDrag.handleProps(index)}
+                            onClick={(event) => event.stopPropagation()}
+                            title="Drag to reorder, or use the arrow keys"
+                            aria-label={`Reorder ${block.kind}, position ${index + 1} of ${blocks.length}`}
+                            className="absolute left-2 top-2 z-20 grid h-7 w-7 cursor-grab place-items-center rounded-md text-white/70 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 active:cursor-grabbing"
+                            style={{
+                              background: 'rgba(7,15,24,0.72)',
+                              border: '1px solid rgba(255,255,255,0.18)',
+                              opacity: blockDrag.draggingIndex === index ? 1 : undefined,
+                            }}
+                          >
+                            <DragHandleGlyph active={blockDrag.draggingIndex === index} />
+                          </button>
+
+                          {block.id === selectedId ? (
+                            <span
+                              className="absolute right-2 top-2 z-10 rounded-full px-2 py-[3px] text-[10px] font-bold uppercase tracking-wider"
+                              style={{ background: theme?.accent, color: '#0D1B2A' }}
+                            >
+                              Editing
+                            </span>
+                          ) : null}
+                          <BlockRenderer
+                            block={block}
+                            accent={theme?.accent ?? '#F5A623'}
+                            radius={RADIUS_SCALE[theme?.radius ?? 'soft']}
+                            density={DENSITY_SCALE[theme?.density ?? 'comfortable']}
+                            lots={lots}
+                            profile={profile}
+                            streamTitle={stream?.title}
+                            streamId={stream?.id}
+                          />
+                        </div>
+                      </DragItem>
+                    ),
+                  )}
+                </div>
               )}
             </div>
           </div>

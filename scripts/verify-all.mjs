@@ -41,6 +41,13 @@ const SUITES = [
     detail: 'rails, authorisation, hold, release-on-confirmation, decline, dispute, refund',
   },
   {
+    name: 'Browser UI (real Chrome)',
+    script: 'verify-ui.mjs',
+    detail: 'pages render, drag reorder handles, keyboard reordering preserves items',
+    /** Needs the dev server, and drives a real browser. Opt in. */
+    optional: { env: 'MM_UI_SUITE' },
+  },
+  {
     name: 'HLS playback (real browser)',
     script: 'verify-hls.mjs',
     detail: 'Chrome drives the shipped hls.js bundle and reports what actually decoded',

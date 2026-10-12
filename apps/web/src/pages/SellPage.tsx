@@ -36,6 +36,7 @@ import {
   TruckIcon,
 } from '@/components/icons';
 import { api } from '@/lib/api';
+import { useDragReorder, DragItem, DragHandleGlyph, reorder } from '@/components/DragReorder';
 import { buyersPremiumRate, formatMoney, isLuxury, round2 } from '@/lib/format';
 import { categoryLabel, conditionHint } from '@/lib/labels';
 import { useSession } from '@/store/session';
@@ -89,6 +90,18 @@ export default function SellPage() {
   const [categoryId, setCategoryId] = useState('watches');
   const [condition, setCondition] = useState<string>('good');
   const [photos, setPhotos] = useState<string[]>([]);
+
+  /**
+   * Drag-to-reorder the gallery (§5.2 "main image selector (drag to reorder)").
+   * Order is meaningful — index 0 becomes the lot cover — so this is a real
+   * product requirement, not decoration. Arrow keys do the same job for anyone
+   * not using a pointer.
+   */
+  const photoDrag = useDragReorder({
+    count: photos.length,
+    onMove: (from, to) => setPhotos((current) => reorder(current, from, to)),
+    describe: (index) => `Photo ${index + 1} of ${photos.length}. Use the arrow keys to change its position.`,
+  });
   const [startingPrice, setStartingPrice] = useState(500);
   const [reservePrice, setReservePrice] = useState<number | ''>('');
   const [buyItNow, setBuyItNow] = useState<number | ''>('');
@@ -320,10 +333,25 @@ export default function SellPage() {
                 Your first image becomes the lot cover.
               </p>
 
-              <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
+              <div ref={photoDrag.containerRef} className="grid grid-cols-3 gap-3 sm:grid-cols-4">
                 {photos.map((photo, index) => (
-                  <div key={photo.slice(-20) + index} className="relative aspect-square overflow-hidden rounded-[12px] border border-white/10">
+                  <DragItem key={photo.slice(-20) + index} index={index} state={photoDrag}>
+                  <div className="group relative aspect-square overflow-hidden rounded-[12px] border border-white/10">
                     <img src={photo} alt={`Upload ${index + 1}`} className="h-full w-full object-cover" />
+
+                    {/* Grab handle, kept separate from the remove button so a
+                        mis-press never deletes a photo. */}
+                    <button
+                      type="button"
+                      {...photoDrag.handleProps(index)}
+                      title="Drag to reorder, or use the arrow keys"
+                      aria-label={`Reorder photo ${index + 1} of ${photos.length}`}
+                      className="absolute bottom-1.5 left-1.5 grid h-6 w-6 cursor-grab place-items-center rounded-md text-white/75 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 active:cursor-grabbing"
+                      style={{ background: 'rgba(7,15,24,0.78)', border: '1px solid rgba(255,255,255,0.2)' }}
+                    >
+                      <DragHandleGlyph active={photoDrag.draggingIndex === index} />
+                    </button>
+
                     {index === 0 ? (
                       <span className="absolute left-1.5 top-1.5 rounded-full px-2 py-[2px] text-[9.5px] font-bold uppercase" style={{ background: 'var(--mm-gold)', color: '#0D1B2A' }}>
                         Cover
@@ -338,6 +366,7 @@ export default function SellPage() {
                       ✕
                     </button>
                   </div>
+                  </DragItem>
                 ))}
 
                 <button
