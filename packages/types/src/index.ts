@@ -231,7 +231,9 @@ export type BidRejectionReason =
   | 'below_minimum_increment'
   | 'already_winning'
   | 'self_bid'
-  | 'rate_limited';
+  | 'rate_limited'
+  /** The caller is not signed in, or the session token was rejected. */
+  | 'not_authenticated';
 
 export interface BidPlacedPayload {
   auction: AuctionWithRelations;

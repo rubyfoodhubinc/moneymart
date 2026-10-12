@@ -49,7 +49,8 @@
     "verify:hls": "node scripts/verify-hls.mjs",
     "verify:ui": "node scripts/verify-ui.mjs",
     "verify:persistence": "node scripts/verify-persistence.mjs",
-    "verify:auth": "node scripts/verify-auth.mjs"
+    "verify:auth": "node scripts/verify-auth.mjs",
+    "verify:socket-auth": "node scripts/verify-socket-auth.mjs"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

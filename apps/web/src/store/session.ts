@@ -13,6 +13,7 @@ import { create } from 'zustand';
 import type { PublicProfile, User } from '@moneymart/types';
 import { api } from '@/lib/api';
 import { clearToken, getToken, setToken } from '@/lib/token';
+import { refreshSocketAuth } from '@/lib/socket';
 
 export type SessionStatus = 'loading' | 'authenticated' | 'anonymous';
 
@@ -109,6 +110,8 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       const result = await api.verifyCode(pending.identifier, code);
       setToken(result.token, result.expiresAt);
+      // Re-handshake so the realtime connection carries the new identity.
+      refreshSocketAuth();
       set({
         busy: false,
         pending: null,
@@ -136,6 +139,7 @@ export const useSession = create<SessionState>((set, get) => ({
       // must be cleared either way or the user stays stuck signed in.
     }
     clearToken();
+    refreshSocketAuth();
     set({ user: null, profile: null, status: 'anonymous', pending: null, error: null });
   },
 

@@ -6,6 +6,7 @@
 import { io, type Socket } from 'socket.io-client';
 import type { ClientToServerEvents, ServerToClientEvents } from '@moneymart/types';
 import { apiBase } from './api';
+import { getToken } from './token';
 
 export type MoneyMartSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -16,6 +17,13 @@ export function getSocket(): MoneyMartSocket {
     // Resolved at connect time from runtime config, so an override applies.
     socket = io(apiBase(), {
       path: '/socket.io',
+      /**
+       * The session token travels in the handshake: a WebSocket upgrade cannot
+       * carry an Authorization header from a browser, so `auth` is the supported
+       * channel. Without it the server treats the connection as anonymous and
+       * refuses every write.
+       */
+      auth: { token: getToken() ?? undefined },
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
@@ -38,4 +46,17 @@ export function disconnectSocket(): void {
  */
 export function resetSocket(): void {
   disconnectSocket();
+}
+
+/**
+ * Reconnect after a sign-in or sign-out so the handshake carries the new token.
+ * Without this a user who signs in mid-session keeps an anonymous socket and
+ * every bid is refused until they reload.
+ */
+export function refreshSocketAuth(): void {
+  if (!socket) return;
+  const token = getToken() ?? undefined;
+  socket.auth = { token };
+  socket.disconnect();
+  socket.connect();
 }

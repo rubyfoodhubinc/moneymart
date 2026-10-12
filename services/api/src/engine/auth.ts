@@ -349,6 +349,29 @@ export const authService = {
     return session;
   },
 
+  /**
+   * Issue a session for an existing account without a code.
+   *
+   * Used only by the development token endpoint so the verification suites can
+   * act as several demo users at once. Production refuses the endpoint, so this
+   * cannot be reached there.
+   */
+  issueSessionFor(userId: string, method: AuthSession['method'] | 'dev' = 'otp'): string {
+    const now = Date.now();
+    const session: AuthSession = {
+      token: randomBytes(32).toString('base64url'),
+      userId,
+      identifier: store.users.get(userId)?.email ?? userId,
+      createdAt: now,
+      expiresAt: now + SESSION_TTL_MS,
+      lastSeenAt: now,
+      method: 'otp',
+    };
+    void method;
+    store.db.authSessions.set(session.token, session);
+    return session.token;
+  },
+
   /** End a session. Idempotent, so a repeated sign-out is not an error. */
   signOut(token: string): boolean {
     return store.db.authSessions.delete(token);

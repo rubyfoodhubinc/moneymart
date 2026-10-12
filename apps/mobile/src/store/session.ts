@@ -14,7 +14,7 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { PublicProfile, User } from '@moneymart/types';
-import { api, getSocket, setSessionToken } from '@/lib/api';
+import { api, getSocket, refreshSocketAuth, setSessionToken } from '@/lib/api';
 
 const TOKEN_KEY = 'mm:token';
 const EXPIRY_KEY = 'mm:tokenExpiry';
@@ -126,6 +126,8 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       const result = await api.verifyCode(pending.identifier, code);
       await persistToken(result.token, result.expiresAt);
+      // Re-handshake so the realtime connection carries the new identity.
+      refreshSocketAuth();
       set({
         busy: false,
         pending: null,
@@ -154,6 +156,7 @@ export const useSession = create<SessionState>((set, get) => ({
       // either way or the user stays stuck signed in.
     }
     await clearPersistedToken();
+    refreshSocketAuth();
     set({ user: null, profile: null, status: 'anonymous', pending: null, error: null });
   },
 
@@ -186,6 +189,8 @@ export const useSession = create<SessionState>((set, get) => ({
       const expiry = await AsyncStorage.getItem(EXPIRY_KEY);
       if (token && (!expiry || Date.now() < Date.parse(expiry))) {
         setSessionToken(token);
+        // The socket may already exist from an earlier launch.
+        refreshSocketAuth();
       } else if (token) {
         await clearPersistedToken();
       }

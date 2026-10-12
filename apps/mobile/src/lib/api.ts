@@ -241,9 +241,27 @@ export function getSocket(): MoneyMartSocket {
       reconnectionDelayMax: 30_000,
       reconnectionAttempts: Infinity,
       timeout: 10_000,
+      /**
+       * The session token travels in the handshake; a WebSocket upgrade cannot
+       * carry an Authorization header. Without it the server treats the socket as
+       * anonymous and refuses every write, so bids would silently fail.
+       */
+      auth: { token: sessionToken ?? undefined },
     });
   }
   return socket;
+}
+
+/**
+ * Re-handshake after a sign-in or sign-out.
+ * An existing socket keeps its original authentication until it reconnects, so a
+ * user who signs in mid-session would otherwise be refused every bid.
+ */
+export function refreshSocketAuth(): void {
+  if (!socket) return;
+  socket.auth = { token: sessionToken ?? undefined };
+  socket.disconnect();
+  socket.connect();
 }
 
 export default api;

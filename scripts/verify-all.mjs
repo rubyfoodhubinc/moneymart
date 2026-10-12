@@ -46,6 +46,11 @@ const SUITES = [
     detail: 'OTP flow, canonicalisation, refusals, code hygiene, production posture',
   },
   {
+    name: 'Realtime authorization',
+    script: 'verify-socket-auth.mjs',
+    detail: 'anonymous spectating, refused writes, payload identity ignored, no forgery',
+  },
+  {
     name: 'Persistence',
     script: 'verify-persistence.mjs',
     detail: 'snapshot round-trip across a hard kill, corrupt-file recovery, opt-out',

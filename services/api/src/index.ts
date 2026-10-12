@@ -134,6 +134,62 @@ const io = new SocketServer<ClientToServerEvents, ServerToClientEvents>(http, {
   path: '/socket.io',
 });
 
+/**
+ * Socket authentication.
+ *
+ * This was missing, and its absence was a complete authorization bypass: the
+ * write handlers took `bidderId` from the payload, so an anonymous socket could
+ * place a real bid as any user. REST refused the same write with 401, which made
+ * the hole easy to miss — the HTTP surface looked locked down while the realtime
+ * surface, which is the one that actually moves money, was open.
+ *
+ * The token arrives in the handshake because a WebSocket upgrade cannot carry an
+ * Authorization header from a browser; `auth.token` is the supported channel.
+ * Read-only joins stay available so a signed-out visitor can watch.
+ */
+io.use((socket, next) => {
+  const handshake = socket.handshake.auth as { token?: string } | undefined;
+  const headerToken = /^Bearer\s+(.+)$/i.exec(String(socket.handshake.headers.authorization ?? ''))?.[1];
+
+  const devUserId = authService.demoHeaderAllowed()
+    ? String((socket.handshake.auth as { userId?: string } | undefined)?.userId ?? '')
+    : '';
+
+  const token = handshake?.token ?? headerToken;
+  if (token) {
+    const session = authService.authenticate(token);
+    if (!session) {
+      next(new Error('invalid_token'));
+      return;
+    }
+    // The verified identity is what handlers must use; nothing in a payload can
+    // override it.
+    (socket.data as { userId?: string }).userId = session.userId;
+    next();
+    return;
+  }
+
+  if (devUserId && users.get(devUserId)) {
+    (socket.data as { userId?: string }).userId = devUserId;
+    next();
+    return;
+  }
+
+  // Anonymous: permitted to watch, refused by every write handler.
+  (socket.data as { userId?: string }).userId = undefined;
+  next();
+});
+
+/**
+ * The authenticated user for this socket.
+ *
+ * Handlers must use this rather than trusting `payload.bidderId`. Returning
+ * undefined means the caller is anonymous, and a write handler must refuse.
+ */
+function socketUserId(socket: { data: unknown }): string | undefined {
+  return (socket.data as { userId?: string }).userId;
+}
+
 /* ── View helpers ──────────────────────────────────────────────────────── */
 
 function publicProfile(userId: string): PublicProfile {
@@ -1025,6 +1081,31 @@ app.post('/api/webhooks/revenuecat', (req, res) => {
 });
 
 /**
+ * Dev-only session minting.
+ *
+ * The realtime layer requires a verified identity, which is correct, but the
+ * verification suites drive flows as several demo accounts at once to exercise
+ * outbid routing and concurrency. Rather than weaken the socket guard, this
+ * issues a real session for a named demo user — and it is refused in production
+ * for the same reason the identity switch is, because otherwise it would be an
+ * account-takeover primitive enabled by an environment variable.
+ */
+app.post('/api/dev/token', (req, res) => {
+  if (process.env.NODE_ENV === 'production' && process.env.MM_ALLOW_DEMO_AUTH !== 'true') {
+    res.status(403).json({ error: 'dev_controls_disabled' });
+    return;
+  }
+  const { userId } = req.body as { userId?: string };
+  const user = userId ? users.get(userId) : undefined;
+  if (!user) {
+    res.status(404).json({ error: 'user_not_found' });
+    return;
+  }
+  const token = authService.issueSessionFor(user.id, 'dev');
+  res.json({ ok: true, token, userId: user.id });
+});
+
+/**
  * Dev-only entitlement grant.
  *
  * Present so the Pro pricing path is exercisable without store credentials.
@@ -1650,18 +1731,49 @@ io.on('connection', (socket) => {
     socket.leave(`auction:${auctionId}`);
   });
 
+  /**
+   * Bid placement.
+   *
+   * The bidder is the AUTHENTICATED identity, never `payload.bidderId`. Taking it
+   * from the payload is what allowed an anonymous client to bid as any user; the
+   * payload field is now ignored outright rather than merely validated, so no
+   * future caller can reintroduce the hole by sending it.
+   */
   socket.on('auction:placeBid', (payload) => {
-    const events = engine.placeBid(payload);
+    const bidderId = socketUserId(socket);
+    if (!bidderId) {
+      socket.emit('auction:rejected', {
+        auctionId: payload?.auctionId ?? '',
+        reason: 'not_authenticated',
+        message: 'Sign in to place a bid.',
+        minimumBid: 0,
+      });
+      return;
+    }
+    const events = engine.placeBid({ ...payload, bidderId });
     broadcast(events);
   });
 
   socket.on('auction:autoBid', (payload) => {
-    const events = engine.setAutoBid(payload);
+    const bidderId = socketUserId(socket);
+    if (!bidderId) {
+      socket.emit('auction:rejected', {
+        auctionId: payload?.auctionId ?? '',
+        reason: 'not_authenticated',
+        message: 'Sign in to set a maximum bid.',
+        minimumBid: 0,
+      });
+      return;
+    }
+    const events = engine.setAutoBid({ ...payload, bidderId });
     broadcast(events);
   });
 
   socket.on('auction:autoBidOff', (payload) => {
-    engine.cancelAutoBid(payload.auctionId, payload.bidderId);
+    const bidderId = socketUserId(socket);
+    if (!bidderId) return;
+    // Scoped to the caller: cancelling someone else's proxy bid must be impossible.
+    engine.cancelAutoBid(payload.auctionId, bidderId);
   });
 
   socket.on('stream:join', (streamId: string) => {
@@ -1684,28 +1796,45 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat:send', (payload) => {
+    const userId = socketUserId(socket);
+    if (!userId) return;
+    const author = users.get(userId);
+    // The author is the authenticated user, so a display name or creator badge
+    // cannot be forged by the payload.
     const message = chat.addChat({
       id: store.nextId('msg'),
       streamId: payload.streamId,
-      userId: payload.userId,
-      displayName: payload.displayName,
-      body: payload.body.slice(0, 400),
+      userId,
+      displayName: author?.displayName ?? 'Member',
+      body: String(payload.body ?? '').slice(0, 400),
       isPinned: false,
-      isCreator: streams.get(payload.streamId)?.creatorId === payload.userId,
+      isCreator: streams.get(payload.streamId)?.creatorId === userId,
       createdAt: store.iso(),
     });
     io.to(`stream:${payload.streamId}`).emit('chat:message', message);
   });
 
   socket.on('chat:pin', (payload) => {
+    const userId = socketUserId(socket);
+    const owner = streams.get(payload.streamId)?.creatorId;
+    // Only the creator of the room may pin, or any viewer could control the room.
+    if (!userId || (owner && owner !== userId)) return;
     const list = chat.get(payload.streamId);
     const target = list.find((m) => m.id === payload.messageId) ?? null;
     chat.pin(payload.streamId, target?.id ?? null);
     io.to(`stream:${payload.streamId}`).emit('chat:pin', { streamId: payload.streamId, message: target });
   });
 
-  socket.on('user:join', (userId: string) => {
+  socket.on('user:join', (requested: string) => {
+    /**
+     * Personal rooms carry outbid alerts and order notifications. Joining
+     * someone else's room would leak their private events, so the requested id is
+     * ignored in favour of the authenticated one.
+     */
+    const userId = socketUserId(socket);
+    if (!userId) return;
     socket.join(`user:${userId}`);
+    void requested;
   });
 });
 

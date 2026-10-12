@@ -54,8 +54,26 @@ async function api(path, init) {
   }
 }
 
+/**
+ * Session tokens for the demo accounts.
+ *
+ * The realtime layer requires a verified identity, so a socket that writes must
+ * carry a real token. Weakening the guard for tests would defeat the point of
+ * having it, so the suite mints genuine sessions through the dev-only endpoint
+ * (which production refuses) and authenticates the handshake properly.
+ */
+const tokenCache = new Map();
+async function tokenFor(userId) {
+  if (tokenCache.has(userId)) return tokenCache.get(userId);
+  const response = await api('/api/dev/token', { method: 'POST', body: { userId } });
+  const token = response.json?.token ?? null;
+  if (token) tokenCache.set(userId, token);
+  return token;
+}
+
 /** Open a socket and resolve once connected (or reject on timeout). */
-function connect(userId, { joinUser = true } = {}) {
+async function connect(userId, { joinUser = true } = {}) {
+  const token = await tokenFor(userId);
   return new Promise((resolve, reject) => {
     const socket = io(API, {
       path: '/socket.io',
@@ -63,6 +81,8 @@ function connect(userId, { joinUser = true } = {}) {
       forceNew: true,
       reconnection: false,
       timeout: 8000,
+      // The handshake carries the verified identity; payload ids are ignored.
+      auth: { token },
     });
     const timer = setTimeout(() => {
       socket.close();
@@ -147,12 +167,16 @@ try {
   const seenB = waitFor(watcherB, 'auction:bid');
   const seenBuyer = waitFor(buyer, 'auction:bid');
 
-  watcherA.emit('auction:placeBid', {
-    auctionId,
-    amount: bidAmount,
-    bidderId: challenger,
-    bidderHandle: challenger,
-  });
+  /**
+   * Bid from the seat OWNING the challenger identity.
+   *
+   * Each socket is authenticated as one demo user and the server ignores any
+   * `bidderId` in the payload, so emitting as usr_ken from usr_sofia's socket is
+   * refused — which is the whole point of the realtime auth work. The seat must
+   * match the identity it acts as.
+   */
+  const bidderSeat = challenger === 'usr_sofia' ? watcherA : watcherB;
+  bidderSeat.emit('auction:placeBid', { auctionId, amount: bidAmount });
 
   const [payloadA, payloadB, payloadBuyer] = await Promise.all([seenA, seenB, seenBuyer]);
   const allThree = Boolean(payloadA && payloadB && payloadBuyer);
@@ -179,12 +203,10 @@ try {
   const raiser = displacedBidder === 'usr_sofia' ? 'usr_ken' : 'usr_sofia';
 
   const displaced = waitFor(outbidSeat, 'notification', 4000);
-  raiserSeat.emit('auction:placeBid', {
-    auctionId,
-    amount: current.minimumBid,
-    bidderId: raiser,
-    bidderHandle: raiser,
-  });
+  // The seat owning the raiser identity must be the one that bids.
+  const raiserSeatOwning = raiser === 'usr_sofia' ? watcherA : watcherB;
+  void raiserSeat;
+  raiserSeatOwning.emit('auction:placeBid', { auctionId, amount: current.minimumBid });
   const outbidNotice = await displaced;
 
   outbidNotice?.category === 'bids' && /outbid/i.test(outbidNotice.title ?? '')
@@ -258,11 +280,24 @@ try {
     : bad('chat message fanned out to the room', JSON.stringify(message)?.slice(0, 80));
 
   if (message?.id) {
+    /**
+     * Pinning is a creator privilege, and the acting socket must BE that creator.
+     *
+     * Two things were wrong before realtime auth landed: the payload named a
+     * creator at all (now ignored), and it named one who does not own the room.
+     * The seat must log in as the stream's actual creator.
+     */
+    const streamOwner = (await api(`/api/streams/${streamId}`)).json?.stream?.creatorId;
+    const ownerSeat = streamOwner ? await connect(streamOwner) : watcherA;
+    sockets.push(ownerSeat);
+    ownerSeat.emit('stream:join', streamId);
+    await sleep(300);
+
     const pinSeen = waitFor(watcherB, 'chat:pin', 4000);
-    watcherA.emit('chat:pin', { streamId, messageId: message.id, userId: 'usr_adaluxe' });
+    ownerSeat.emit('chat:pin', { streamId, messageId: message.id });
     const pin = await pinSeen;
     pin?.message?.isPinned
-      ? ok('pin broadcast marks the message pinned')
+      ? ok('pin broadcast marks the message pinned', `by ${streamOwner}`)
       : bad('pin broadcast marks the message pinned', JSON.stringify(pin)?.slice(0, 80));
   }
 
