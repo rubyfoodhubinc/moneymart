@@ -754,6 +754,39 @@ Three mistakes of mine, recorded:
 
 Both are fixed: settings are applied on every run, and the file is re-synced and compared.
 
+### The defect the UI test was built for: sign-in was unreachable
+
+`AuthScreen` disabled its submit button unless **both** a valid email and an 8-character
+password were present:
+
+```ts
+const canSubmit = mode === 'otp' ? otp.length === 6 : emailValid && passwordValid;
+```
+
+But sign-in is **passwordless** — `submit()` calls `startOtp()` and never reads the
+password, and the code documents this: *"the password field is retained for continuity but
+no longer gates entry, because no password is ever set on the account."*
+
+So with a valid email the button rendered **disabled**, and a disabled control swallows
+taps. The app looked like it was refusing to send a code; **it could not sign in at all.**
+
+> `git log -S` shows this line unchanged since the **initial commit**. Mobile sign-in has
+> been broken for the entire life of the project, and **all 760 automated checks passed
+> throughout** — because not one of them ever pressed the button.
+
+`canSubmit` now asks for what each mode needs: a code in OTP mode, email **and** password
+for sign-up (which sets one), and a valid email alone for sign-in.
+
+**Verified by driving the real flow** against a local gateway:
+
+```
+Type 'ada@moneymart.app' into "you@example.com"
+Tap "Sign in"                    ← enabled now; before, this tap did nothing
+Type '179645' into "000000"      ← the CODE field; the app switched modes
+Tap "Verify code"
+→ the app navigated to "Set up your profile"
+```
+
 ### Attempting sign-in and a bid, and reporting exactly how far it gets
 
 `testSignInAndPlaceBid` walks onboarding, types an email, submits the form, asks a local
@@ -783,8 +816,10 @@ Three wrong expectations of mine, found by running it rather than reading it:
   forward**, then through an `.xctestplan`, which changed which bundles xcodebuild
   considered. It is now a Swift constant generated into the test bundle.
 
-**Honest limit:** completing sign-in, placing a bid, and the sell flow with its photo
-picker **remain unverified by tap.**
+**Honest limit:** the run stops at **"Enter MoneyMart"** on profile setup — the app does
+not leave that screen, and it never issues the `PATCH /api/me` the handler should send
+(the gateway logged no such request, and the screen showed no error). **A bid and the sell
+flow with its photo picker therefore remain unverified by tap.**
 
 ### A CI regression this caused, and its fix
 
