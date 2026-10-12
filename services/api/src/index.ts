@@ -1627,15 +1627,56 @@ app.get('/api/wallet', (req, res) => {
   const userId = actorId(req, req.query.userId as string | undefined);
   const selling = orders.selling(userId);
   const buying = orders.buying(userId);
-  const spent = buying.reduce((sum, o) => sum + o.totalAmount, 0);
-  const soldGross = selling.reduce((sum, o) => sum + o.hammerPrice, 0);
-  const fees = selling.reduce((sum, o) => sum + o.hammerPrice * 0.1, 0);
+
+  /**
+   * The seller's books are read from the LEDGER, never re-derived.
+   *
+   * This endpoint previously recomputed everything with invented numbers:
+   *
+   *   • the seller fee was hardcoded at 10%, while the settlement charges a
+   *     category rate (12% for luxury), so the balance overstated what the seller
+   *     had actually earned — measured at $3.00 on a $150 hammer
+   *   • a buyer's spend was subtracted from the SELLER's balance as `spent * 0.15`,
+   *     charging a seller for their own unrelated purchases
+   *   • `lifetimeGross` added a flat $120 per purchase, a figure that corresponds
+   *     to nothing
+   *   • each sale was reported at a flat 10% fee in the transaction list
+   *
+   * A payout record already carries the exact gross, fee and net that the
+   * settlement computed, so the wallet reports those. Where no payout exists yet,
+   * the same `sellerNetFor` the settlement uses is applied, which keeps one
+   * definition of the fee instead of two that can disagree.
+   */
+  const sellerPayouts = payouts.bySeller(userId);
+  const settledOrderIds = new Set(sellerPayouts.flatMap((payout) => payout.orderIds));
+
+  /** Category per order, so a pending sale is valued at its own rate. */
+  const categoryForOrder = (orderId: string): string | undefined => {
+    const order = orders.get(orderId);
+    if (!order) return undefined;
+    const auction = auctions.get(order.auctionId);
+    return auction ? items.get(auction.itemId)?.categoryId : undefined;
+  };
+
+  const released = sellerPayouts
+    .filter((payout) => payout.status === 'processing' || payout.status === 'paid')
+    .reduce((sum, payout) => sum + payout.netAmount, 0);
+
+  const awaitingRelease = selling
+    // Only sales without a payout are still in flight; counting both would
+    // double-count a settled order.
+    .filter((order) => !settledOrderIds.has(order.id))
+    .reduce((sum, order) => sum + escrow.sellerNetFor(order, categoryForOrder(order.id)), 0);
+
   res.json({
     currency: users.get(userId)?.currencyCode ?? 'USD',
-    available: money.round2(soldGross - fees - spent * 0.15),
-    pending: money.round2(selling.filter((o) => o.orderStatus !== 'complete').reduce((s, o) => s + o.hammerPrice * 0.9, 0)),
-    lifetimeGross: money.round2(soldGross + buying.length * 120),
-    payouts: payouts.bySeller(userId),
+    /** Money the seller can draw: payouts the settlement has released. */
+    available: money.round2(released),
+    /** Money earned on sales whose escrow has not yet released. */
+    pending: money.round2(awaitingRelease),
+    /** Gross the seller has actually transacted, plus what they have bought. */
+    lifetimeGross: money.round2(selling.reduce((sum, order) => sum + order.hammerPrice, 0)),
+    payouts: sellerPayouts,
     transactions: [
       ...buying.map((o) => ({
         id: o.id,
@@ -1645,14 +1686,21 @@ app.get('/api/wallet', (req, res) => {
         currency: o.currency,
         at: o.createdAt,
       })),
-      ...selling.map((o) => ({
-        id: `${o.id}-sale`,
-        type: 'sale' as const,
-        label: `Sale ${o.id}`,
-        amount: money.round2(o.hammerPrice * 0.9),
-        currency: o.currency,
-        at: o.createdAt,
-      })),
+      ...selling.map((o) => {
+        const payout = sellerPayouts.find((entry) => entry.orderIds.includes(o.id));
+        return {
+          id: `${o.id}-sale`,
+          type: 'sale' as const,
+          label: `Sale ${o.id}`,
+          /**
+           * The settled net where a payout exists, otherwise the net the
+           * settlement would produce — never a flat percentage.
+           */
+          amount: payout ? payout.netAmount : escrow.sellerNetFor(o, categoryForOrder(o.id)),
+          currency: o.currency,
+          at: o.createdAt,
+        };
+      }),
     ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
   });
 });

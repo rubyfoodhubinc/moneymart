@@ -46,6 +46,11 @@ const SUITES = [
     detail: 'OTP flow, canonicalisation, refusals, code hygiene, production posture',
   },
   {
+    name: 'End-to-end money path',
+    script: 'verify-lifecycle.mjs',
+    detail: 'list → bid → settle → pay → escrow → ship → release → books balance',
+  },
+  {
     name: 'Code delivery (SMS + email)',
     script: 'verify-delivery.mjs',
     detail: 'the sent code is the verified code, sender forms, failure reasons',

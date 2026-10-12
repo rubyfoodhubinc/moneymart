@@ -59,7 +59,8 @@
     "verify:ci:api": "node scripts/ci.mjs",
     "verify:production-app": "node scripts/verify-production-app.mjs",
     "verify:oauth": "node scripts/verify-oauth.mjs",
-    "verify:delivery": "node scripts/verify-delivery.mjs"
+    "verify:delivery": "node scripts/verify-delivery.mjs",
+    "verify:lifecycle": "node scripts/verify-lifecycle.mjs"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

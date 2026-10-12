@@ -51,6 +51,7 @@ const API_SUITES = [
   'verify-socket-auth.mjs',
   'verify-persistence.mjs',
   'verify-subscriptions.mjs',
+  'verify-lifecycle.mjs',
 ];
 
 /**
