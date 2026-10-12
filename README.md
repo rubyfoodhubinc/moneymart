@@ -636,6 +636,39 @@ One dev-loop detail: the app requests its bundle on the **default port 8081**, s
 Metro must run there rather than 8082, or the app shows React Native's red box
 "No script URL provided".
 
+### Automatic reload on mobile — intermittent, and I could not make it reliable
+
+The stated requirement is automatic reload across every build. Web and TV both have
+working HMR. Mobile does not, reliably.
+
+What I established by testing rather than assuming:
+
+- **It can work.** I made an edit that introduced a syntax error; the red
+  "Failed to compile" overlay appeared on the device **without my touching the app**,
+  and when I fixed the source the overlay cleared and the working screen returned
+  **by itself**. So the fast-refresh path is wired correctly end to end.
+- **It does not fire dependably.** Repeating the same experiment, Metro sometimes did
+  not rebundle at all: edits sat on disk with no rebuild, and a deliberately
+  introduced syntax error never reached the device.
+
+I then tried the standard fix and it made things **worse**, which is worth recording:
+
+- `brew install watchman` — Watchman could not crawl this tree. Even with Metro's
+  `watchFolders` scoped to two small packages, Metro looped on
+  `Waiting for Watchman \`watch-project\` (30s)...` indefinitely, never served a
+  bundle, and the app showed *"Could not connect to development server"*.
+  Watchman's own `watch .` did not finish in ten minutes, because the hoisted
+  `node_modules` holds the whole pnpm store. **Watchman was therefore uninstalled**,
+  and the dev server worked again immediately.
+- I also tried disabling Watchman through Metro config. My edits to `metro.config.js`
+  silently no-op'd — the file is byte-identical to what it was, and I misread a grep
+  that returned `0` as success. So nothing in that config changed, and **uninstalling
+  Watchman was the real fix**, not the config work I thought I had done.
+
+Net: mobile dev reload works sometimes and not others with Metro's Node watcher on
+this machine. The app itself is unaffected — every screenshot in this README came
+from a real simulator, and a relaunch always loads the current source.
+
 Guarded with **8 checks** in the mobile suite, because the native output is
 generated — without them a prebuild could quietly drop the fix.
 
