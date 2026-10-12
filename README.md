@@ -29,6 +29,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Persistence** | ✅ Postgres snapshotting — data survives redeploys (proven in production) |
 | **Authorization** | ✅ Object-level checks — orders private to participants, storefront writes owner-scoped |
 | **Rate limiting** | ✅ Ingress limits on the message-sending and write paths |
+| **CI** | ✅ Green on GitHub — 345 checks over 13 suites on every push |
 | **Verification** | ✅ **423 automated checks** across 16 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
@@ -405,6 +406,42 @@ auth: {"demoHeader": false}
 Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
+
+## Continuous integration
+
+Every push to `main` runs the release gate on a clean Ubuntu runner, against
+services the gate starts itself — no credentials, database or pre-running server,
+so a fork or a fresh clone gets the same result.
+
+```bash
+pnpm verify:ci        # full gate: boots api, web and tv, runs 13 suites (345 checks)
+pnpm verify:ci:api    # API-only gate for a fast local loop (316 checks)
+```
+
+It runs `typecheck`, builds the API, web and TV, then the gate. The HLS playback
+proof runs too, whenever a Chromium binary is present — which is the difference
+between *"the player compiles"* and *"the player decodes"*.
+
+**Excluded, stated so a green check is not mistaken for full coverage:**
+
+| Suite | Why | Run it with |
+|---|---|---|
+| browser UI | needs Chromium **and** a dev server pointed at the gate's API | `pnpm verify:ui` |
+| mobile bundling | exports both native platforms; slow | `pnpm verify:mobile` |
+| deployment | needs the hosted gateway and its certificate | `pnpm verify:deploy` |
+
+The first CI run **failed**, which is what running it was for: the gate started
+only the API, so the TV and health suites failed with connection-refused. A gate
+that does not start what it tests reports false negatives, and a gate whose
+failures are tolerated stops being read. That is now fixed and verified green.
+
+### Launchers were machine-specific
+
+Six scripts hardcoded the repository location and the DSH Node runtime path, so
+none could run in CI, on another machine, or from a fresh clone — and the failure
+was a bare `no such file` rather than anything explaining that the path was baked
+in. Both are now derived (`scripts/lib/runtime.sh`): the root from the script's own
+location, Node from the DSH runtime when present, otherwise from `PATH`.
 
 ## Listing image validation
 
