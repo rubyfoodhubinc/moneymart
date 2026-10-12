@@ -22,7 +22,8 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Production deployment** | ✅ **Live** — https://moneymart-production.up.railway.app |
 | **Repository** | ✅ https://github.com/rubyfoodhubinc/moneymart |
 | **Payments & escrow** | ✅ Provider-abstracted rails + enforced hold/release state machine |
-| **Verification** | ✅ **197 automated checks** across 7 suites — `pnpm verify:all` |
+| **Memberships** | ✅ RevenueCat entitlements — Pro pricing 10%/15% enforced server-side |
+| **Verification** | ✅ **200 automated checks** across 8 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -87,8 +88,8 @@ missing asset returning `404` instead of silently serving the shell.
 ### Verify everything
 
 ```bash
-pnpm verify:all                  # 155 checks across 6 suites — the release gate
-MM_MOBILE_SUITE=1 pnpm verify:all  # 197 checks — adds the native mobile build
+pnpm verify:all                  # 165 checks across 7 suites — the release gate
+MM_MOBILE_SUITE=1 pnpm verify:all  # 207 checks — adds the native mobile build
 ```
 
 ```
@@ -99,11 +100,12 @@ MM_MOBILE_SUITE=1 pnpm verify:all  # 197 checks — adds the native mobile build
   PASS  Realtime Socket.IO (§9.2 broadcast)    19 passed
   PASS  Payments & escrow (§9.1)               31 passed
   PASS  TV / IPTV (§7)                         35 passed
+  PASS  Payments & membership                  35 passed
   PASS  Mobile (native build)                   42 passed
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  197 passed   0 failed
+  TOTAL  200 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -114,6 +116,7 @@ pnpm verify            # engine rules over REST (31)
 pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
+pnpm verify:subscriptions  # providers, identity guard, entitlements, Pro pricing (35)
 pnpm verify:mobile     # icons, store identity, Hermes bundles, QR deep link (42)
 pnpm verify:deploy     # TLS, single origin, cache, TV isolation (28, needs deploy:local)
 pnpm health            # end-to-end product health (11)
@@ -246,11 +249,51 @@ requires_payment ──pay──▶ in_escrow ──buyer confirms──▶ rele
 * A dispute freezes funds; only an admin can resolve it, and release is refused while disputed.
 * `released + refunded` can never exceed what was collected — enforced inside every transition.
 
-**Providers** are pluggable behind one interface. `StripeProvider` (cards,
-USD/GBP/CAD) and `PaystackProvider` (NGN cards, transfer, USSD) activate the moment
-`STRIPE_SECRET_KEY` / `PAYSTACK_SECRET_KEY` are present; until then a
-`SimulatedProvider` runs the identical lifecycle so the flow is never dead-ended.
-Declines are reproducible on demand (any amount ending `.13`).
+**Providers** are pluggable behind one interface:
+
+| Rail | Markets | Activation |
+|---|---|---|
+| Stripe | cards, USD/GBP/CAD | `STRIPE_SECRET_KEY` (`sk_…`) |
+| **PayPal** | cards, balance, USD/GBP/CAD/EUR/AUD | `PAYPAL_CLIENT_ID` + `PAYPAL_CLIENT_SECRET` |
+| Paystack | NGN cards, transfer, USSD | `PAYSTACK_SECRET_KEY` |
+| Simulated | everywhere | always |
+
+PayPal uses Orders v2 with a cached OAuth token and idempotency keys, so a
+retried create cannot double-charge. **PayPal Payouts is deliberately not
+used for seller settlement** — it is a separate product without marketplace
+split settlement; NGN settles via Paystack transfers and USD/GBP/CAD via Stripe
+Connect. The stub says so rather than pretending otherwise.
+
+Until a key is present the `SimulatedProvider` runs the identical lifecycle, so
+the flow is never dead-ended. Declines are reproducible on demand (amount ending
+`.13`).
+
+## Memberships (§10 Pro pricing)
+
+An order settles **once** through escrow; a membership **recurs** on the user and
+changes what they pay. Conflating those was the obvious trap, so entitlements are
+a separate service rather than another `PaymentProvider`.
+
+RevenueCat is the source of truth on a device purchase and is mirrored
+server-side, because a webhook can arrive before, after, or without the client
+ever calling the API. Consequences that shaped the design:
+
+- **Pricing is resolved server-side at settlement.** A client claiming to be Pro
+  must never lower its own premium.
+- **`status` gates the entitlement, not `tier`.** `tier` records what was bought
+  and survives an expiration, so trusting it alone would keep granting the
+  discount to a lapsed member.
+- **Webhooks provision the account.** The store can confirm a purchase before the
+  app has ever called the API, so an unknown `app_user_id` gets a minimal
+  account rather than losing a paid-for entitlement.
+- **Sandbox events cannot grant a live entitlement** in production.
+- **Unknown entitlement identifiers grant nothing** — matched against configured
+  ids, not a substring test (`PRO` does not contain lowercase `pro`).
+
+```
+listing discloses 20%   →   non-member pays 20%   →   Pro pays 15%
+         (standard)            (total 12200)            (total 10662.78)
+```
 
 **Buyer-facing UI**: the escrow panel appears on every order in `/account/orders`
 with Pay, Confirm receipt, and Report a problem — plus the full audit trail. The
