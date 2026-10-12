@@ -34,7 +34,18 @@ export default function AuthScreen({ navigation }: { navigation: any }) {
   /* Real-time validation (§5.2) */
   const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), [email]);
   const passwordValid = password.length >= 8;
-  const canSubmit = mode === 'otp' ? otp.length === 6 : emailValid && passwordValid;
+  /**
+   * What the submit button requires.
+   *
+   * SIGN-IN is passwordless: `submit()` sends a code for a valid address and never reads
+   * the password, yet this required one — so with a valid email the button was
+   * permanently DISABLED. A disabled control ignores taps, which is why the app looked
+   * like it was refusing to send a code. Sign-in was unreachable in the shipped app.
+   *
+   * Sign-up still requires a password, because that flow sets one.
+   */
+  const canSubmit =
+    mode === 'otp' ? otp.length === 6 : mode === 'signup' ? emailValid && passwordValid : emailValid;
 
   const requestCode = useSession((state) => state.requestCode);
   const verifyCode = useSession((state) => state.verifyCode);

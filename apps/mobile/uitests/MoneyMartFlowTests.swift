@@ -244,13 +244,14 @@ final class MoneyMartFlowTests: XCTestCase {
     /**
      * Ask for a code.
      *
-     * The submit control is "Sign in" — NOT "Send code", which was my guess. Pressing it
-     * requests the code and moves the screen into code entry, so the absent label was a
-     * wrong expectation rather than a missing feature.
+     * The submit control is "Sign in" — NOT "Send code", which was my guess. Sign-in is
+     * passwordless, so a valid address alone enables it; earlier this button was rendered
+     * DISABLED because it also demanded a password, and a disabled control swallows taps.
      */
     let send = waitFor(app, "Sign in", timeout: 15)
       ?? waitFor(app, "Send code", timeout: 5)
     XCTAssertNotNil(send, "no way to request a code\(elementDump(app))")
+    XCTAssertTrue(send?.isEnabled ?? false, "the submit control was disabled with a valid email\(elementDump(app))")
     if let send { tap(send, in: app) }
 
     // The code field appears once a code has been requested.
@@ -276,18 +277,20 @@ final class MoneyMartFlowTests: XCTestCase {
      * complete there, and a red suite would only mean the environment lacked something.
      */
     /**
-     * NOT YET SOLVED, so it does not run by default.
+     * Skipped until the step after sign-in is understood.
      *
-     * The flow reaches code entry and the gateway demonstrably issues a code the app
-     * receives, but the screen does not reliably switch into code-entry mode, so the run
-     * types the code into the email field and the assertion fails on a race rather than on
-     * a product defect. A test that fails for a reason I have not diagnosed is worse than
-     * no test: it trains everyone to ignore a red suite.
+     * This test found and documented a real defect: the passwordless sign-in button was
+     * DISABLED because it also required a password, so the app could not sign in at all.
+     * With that fixed the flow now completes through OTP — the code is typed into the code
+     * field and the app navigates to profile setup — and stops on "Enter MoneyMart", which
+     * does not leave the screen.
      *
-     * Opt in with MM_UITEST_BID=1 once the race is understood.
+     * It skips rather than failing because that last step is undiagnosed, and a test that
+     * fails for an unexplained reason trains everyone to ignore a red suite. Opt in with
+     * MM_UITEST_BID=1.
      */
     guard ProcessInfo.processInfo.environment["MM_UITEST_BID"] == "1" else {
-      throw XCTSkip("testSignInAndPlaceBid is not yet reliable; set MM_UITEST_BID=1 to run it")
+      throw XCTSkip("the post-sign-in step is undiagnosed; set MM_UITEST_BID=1 to run it")
     }
 
     let base = TestGateway.baseURL
@@ -339,11 +342,27 @@ final class MoneyMartFlowTests: XCTestCase {
     XCTAssertNotNil(verify, "no control to submit the code\(elementDump(app))")
     if let verify { tap(verify, in: app) }
 
+    // ── Sign-in completes into profile setup ───────────────────────────────
+    /**
+     * A first sign-in lands on profile setup, not the feed.
+     *
+     * The app asks for a display name and preferences before entering, which the earlier
+     * version of this test did not expect — it looked straight for the feed and reported a
+     * failure on a screen that was working exactly as designed.
+     */
+    let setup = waitFor(app, "Set up your profile", timeout: 60)
+      ?? waitFor(app, "Enter MoneyMart", timeout: 15)
+    XCTAssertNotNil(setup, "signing in did not reach profile setup\(elementDump(app))")
+
+    // Finish setup, which is the step that actually enters the app.
+    let enter = waitFor(app, "Enter MoneyMart", timeout: 30)
+    if let enter { tap(enter, in: app) }
+
     // ── The signed-in app must show the feed ────────────────────────────────
     let feed = waitFor(app, "For You", timeout: 60)
       ?? waitFor(app, "Live creators", timeout: 15)
       ?? waitFor(app, "HOME", timeout: 15)
-    XCTAssertNotNil(feed, "signing in did not reach the feed\(elementDump(app))")
+    XCTAssertNotNil(feed, "entering did not reach the feed\(elementDump(app))")
 
     // ── Open a lot and bid ──────────────────────────────────────────────────
     let lot = firstAuctionCell(app)
