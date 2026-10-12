@@ -95,6 +95,36 @@ session.json?.user?.id === created.json?.user?.id ? ok('the token identifies the
 const wallet = await call('/api/wallet', bearer(token));
 wallet.status === 200 ? ok('the token authorises a protected resource', 'GET /api/wallet') : bad('the token authorises a protected resource', `status ${wallet.status}`);
 
+/* ── 1b. Delivery honesty ──────────────────────────────────────────────── */
+section('1b. Delivery is reported honestly');
+
+/**
+ * With no provider configured, no code can EVER arrive. The response must say so
+ * rather than leaving a client to interpret a transport name, because otherwise
+ * a user is told to check an inbox that will stay empty.
+ */
+const deliveryReport = first.json?.delivery;
+typeof deliveryReport?.reachable === 'boolean'
+  ? ok('the response states whether the code actually reached anyone', `reachable=${deliveryReport.reachable}`)
+  : bad('the response states whether the code actually reached anyone', JSON.stringify(deliveryReport).slice(0, 70));
+
+typeof deliveryReport?.configured === 'object'
+  ? ok(
+      'the response reports which channels are configured',
+      `sms=${deliveryReport.configured.sms} email=${deliveryReport.configured.email}`,
+    )
+  : bad('the response reports which channels are configured', JSON.stringify(deliveryReport).slice(0, 70));
+
+// The two must agree: a delivered code implies a configured channel.
+deliveryReport?.delivered && !(deliveryReport.configured?.sms || deliveryReport.configured?.email)
+  ? bad('delivery cannot claim success with no channel configured')
+  : ok('delivery and configuration are consistent');
+
+const healthDelivery = await call('/api/health');
+typeof healthDelivery.json?.auth?.delivery === 'object'
+  ? ok('health exposes whether sign-in is reachable', JSON.stringify(healthDelivery.json.auth.delivery))
+  : bad('health exposes whether sign-in is reachable', JSON.stringify(healthDelivery.json?.auth).slice(0, 70));
+
 /* ── 2. Identifiers are canonicalised ──────────────────────────────────── */
 section('2. Identifier canonicalisation');
 

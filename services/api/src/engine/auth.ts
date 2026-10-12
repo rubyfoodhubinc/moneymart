@@ -144,6 +144,21 @@ export interface DeliveryResult {
 }
 
 /**
+ * Whether any transport is configured at all.
+ *
+ * Distinct from a single attempt failing: with no provider configured no code
+ * can EVER arrive, and the response says so explicitly rather than leaving a
+ * client to interpret `transport: "log"`. Exposed in health too, so an operator
+ * sees an unreachable sign-in without reading a log line.
+ */
+export function deliveryConfigured(): { sms: boolean; email: boolean } {
+  return {
+    sms: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_VERIFY_SERVICE_SID),
+    email: Boolean(process.env.RESEND_API_KEY),
+  };
+}
+
+/**
  * Send the code.
  *
  * Twilio Verify is used when configured, otherwise Resend for email, otherwise
@@ -376,6 +391,8 @@ export const authService = {
   signOut(token: string): boolean {
     return store.db.authSessions.delete(token);
   },
+
+  deliveryConfigured,
 
   /** Live sessions for an account, for the account screen. */
   sessionsFor(userId: string): Omit<AuthSession, 'token'>[] {

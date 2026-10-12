@@ -32,7 +32,7 @@ import { mountStaticHost } from './lib/staticHost.js';
 import { createPersistence, shouldSeed } from './lib/persistence.js';
 import { rateLimit, POLICIES, limiterStatus, resetRateLimits, startLimiterSweep } from './lib/rateLimit.js';
 import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
-import { authService } from './engine/auth.js';
+import { authService, deliveryConfigured } from './engine/auth.js';
 import { resolveStreamPlayback } from './engine/playback.js';
 import { validateImages, MAX_IMAGES } from './lib/images.js';
 import {
@@ -473,6 +473,13 @@ app.post('/api/auth/request', async (req, res) => {
       delivered: result.delivery.delivered,
       transport: result.delivery.transport,
       ...(result.delivery.detail ? { detail: result.delivery.detail } : {}),
+      /**
+       * True only when a message was actually sent. A client must not tell a user
+       * to check their inbox when nothing was dispatched — which is the state
+       * production is in until a provider key is configured.
+       */
+      reachable: result.delivery.delivered,
+      configured: deliveryConfigured(),
     },
     // Only populated when development exposure is enabled.
     ...(result.devCode ? { devCode: result.devCode } : {}),
@@ -623,7 +630,16 @@ app.get('/api/health', (_req, res) => {
      * being an assumption about its configuration.
      */
     persistence: persistence ? persistence.status().adapter : null,
-    auth: { demoHeader: authService.demoHeaderAllowed(), liveSessions: store.db.authSessions.size },
+    auth: {
+      demoHeader: authService.demoHeaderAllowed(),
+      liveSessions: store.db.authSessions.size,
+      /**
+       * Whether a sign-in code can actually reach anyone. False means the
+       * platform cannot onboard a new user, which is worth seeing without
+       * reading a log.
+       */
+      delivery: deliveryConfigured(),
+    },
     time: store.iso(),
   });
 });
@@ -2080,6 +2096,12 @@ http.listen(PORT, () => {
     `  Auth: passwordless OTP — demo header ${authService.demoHeaderAllowed() ? 'ALLOWED' : 'refused'}` +
       (authService.demoHeaderAllowed() ? (process.env.NODE_ENV === 'production' ? ' (MM_ALLOW_DEMO_AUTH=true)' : ' (non-production)') : ''),
   );
+  const channels = deliveryConfigured();
+  if (!channels.sms && !channels.email) {
+    console.log('  Auth delivery: NONE CONFIGURED — sign-in codes are generated but cannot be sent');
+  } else {
+    console.log(`  Auth delivery: ${[channels.sms ? 'Twilio (SMS)' : null, channels.email ? 'Resend (email)' : null].filter(Boolean).join(' + ')}`);
+  }
   console.log(`  Auth codes exposed in responses: ${process.env.MM_AUTH_DEV_CODES === 'true' || (process.env.MM_AUTH_DEV_CODES !== 'false' && process.env.NODE_ENV !== 'production') ? 'yes (development)' : 'no'}`);
   if (persistence) {
     const status = persistence.status();
