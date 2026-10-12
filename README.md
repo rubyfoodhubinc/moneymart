@@ -33,10 +33,11 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Disputes** | ✅ Admin-only resolution; a refund returns funds, and neither branch can double-pay |
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **578 automated checks** across 20 suites — `pnpm verify:all` |
+| **Verification** | ✅ **608 automated checks** across 21 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -123,7 +124,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  578 passed   0 failed
+  TOTAL  608 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -136,6 +137,7 @@ pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
 pnpm verify:lifecycle  # listing → bid → settle → pay → escrow → release → books (36)
+pnpm verify:dispute    # admin-only resolution, refund, seller-favourable release (30)
 pnpm verify:delivery   # the sent code is the verified code; senders and failures (31)
 pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (47)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
@@ -560,6 +562,43 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## Disputes: a verdict that could never be reached
+
+The money path stops before disputes, so the branch where money goes **back** to a
+buyer — and the branch where a contested sale still pays out — had never been
+exercised.
+
+```bash
+pnpm verify:dispute   # 30 checks
+```
+
+It found a live bug. `resolveDispute` with a `release` verdict saved the released
+amount onto the **disputed** record and transitioned that straight to `released`.
+The state machine permits `disputed → releasing`, **not** `disputed → released`, so
+the transition threw `illegal_escrow_transition` on *every* attempt:
+
+> **An administrator could never rule a dispute in the seller's favour.** The admin
+> saw a 409 and the seller was never paid.
+
+And it was worse than a refusal. The payout row is created **before** the
+transition, so each failed attempt still wrote a payout into the ledger for escrow
+that never released — money recorded in one direction while the funds stayed put,
+and a retry added another row. The release path now goes through `releasing`,
+exactly as the buyer-confirmed path does, so the payout and the ledger move
+together.
+
+Two more defects, both only visible once a refund exists:
+
+- a refunded sale was still reported as **income** in the seller's transaction list
+  at their full net; it now reads "Refunded" with a zero amount
+- a refunded order was counted in **`pending`**, telling the seller they were owed
+  the full net of a sale that had been returned to the buyer
+
+The suite also pins what was already correct: only an administrator may resolve, a
+buyer cannot resolve their own dispute, a seller cannot rule in their own favour,
+`heldAmount` survives a refund as an audit trail, released plus refunded never
+exceeds held, and a disputed escrow cannot be resolved twice.
 
 ## The money path, end to end
 
