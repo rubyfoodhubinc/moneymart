@@ -33,6 +33,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Mobile native build** | ✅ Builds and installs on a simulator; launch is blocked by iOS 27 vs RN 0.79 |
 | **Mobile photos** | ✅ Picker-to-API conversion verified against the real validator; camera/library needs a device |
 | **Mobile selling** | ✅ Captures real photographs — camera and gallery — into listings and the avatar |
 | **Account settings** | ✅ Preferences persist server-side; data export is a real, scoped download |
@@ -571,6 +572,53 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## Building the mobile app natively
+
+The mobile app had been reported as unverifiable for three rounds. It is not
+unverifiable — it needed work, and this is what it took:
+
+| Blocker | Fix |
+|---|---|
+| CocoaPods absent; macOS ships Ruby 2.6 and current CocoaPods needs 3.0+ | Ruby 4.0.7 + CocoaPods 1.17.0 via Homebrew |
+| `.npmrc` said `node-linker=hoisted` **in a comment** while the value was `isolated`, and pnpm 11 no longer reads that key from `.npmrc` | `nodeLinker: hoisted` in `pnpm-workspace.yaml` — where pnpm 11 reads it |
+| Yoga headers not found (`'yoga/algorithm/Cache.h' file not found`) | a flat `node_modules`, so React Native's podspecs compute their relative header paths correctly |
+| Pods declaring iOS 12.4/13.4; Xcode 27 refuses anything under 15.0 | raised in the Podfile's `post_install` |
+| `fmt` 11.0.2 `consteval` checks rejected by Apple clang 17+ | the library's documented `FMT_USE_CONSTEVAL=0`, plus c++17 |
+
+Result: **1054 compile steps, zero errors, BUILD SUCCEEDED.** `MoneyMart.app` was
+installed and launched on a booted iPhone 18 Pro simulator. The
+`expo-image-picker` config plugin is confirmed working natively — it injected
+`NSCameraUsageDescription` and `NSPhotoLibraryUsageDescription` into the generated
+`Info.plist`, and `EXImageLoader`/`ExpoImagePicker` are in the built workspace.
+
+### Where it stops, precisely
+
+The app crashes on launch with `EXC_BREAKPOINT` in:
+
+```
+_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption
+```
+
+The generated `Info.plist` declares **no scene manifest** and `AppDelegate.swift`
+still builds a `window = UIWindow(...)`, so **iOS 27** — the only runtime the
+installed simulator offers — terminates an app that has not adopted the scene
+lifecycle. That is a **React Native 0.79 / iOS 27 compatibility gap**, not an app
+defect. Closing it needs either an **iOS 18 simulator runtime** or a newer Expo SDK,
+and neither is a one-line change.
+
+### Three environment regressions the layout switch caused
+
+All fixed in the scripts that exist to fix them:
+
+- `scripts/lib/runtime.sh` resolved Vite from each app's `node_modules`; under a
+  hoisted linker it lives at the root, so both dev servers failed to start
+- `scripts/ensure-env.sh` patched rollup and lightningcss only inside the pnpm
+  **store**; hoisted, that silently does nothing and the web app dies with
+  `ERR_DLOPEN_FAILED`, then renders **0 characters** because Tailwind cannot load
+  `../lightningcss.darwin-arm64.node`
+
+Full audit green in the new layout: **735 passed, 0 failed.**
 
 ## The mobile photo path, verified against the real API
 
