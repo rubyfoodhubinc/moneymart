@@ -55,7 +55,8 @@
     "verify:authorization": "node scripts/verify-authorization.mjs",
     "verify:images": "node scripts/verify-images.mjs",
     "build:api": "pnpm --filter @moneymart/api build",
-    "verify:ci": "node scripts/ci.mjs"
+    "verify:ci": "node scripts/ci-full.mjs",
+    "verify:ci:api": "node scripts/ci.mjs"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

@@ -5,10 +5,16 @@
 # starts itself. No credentials, database or pre-running server are required, so
 # a fork or a fresh clone gets the same result.
 #
-# The browser suites (UI, HLS) and the mobile bundling suite are excluded because
-# they need a Chromium binary, a dev server and both native platforms; they are
-# runnable on demand and are covered in local runs. This is stated so a green
-# check is not mistaken for full coverage.
+# The gate starts the API, the web dev server and the TV dev server itself, then
+# runs 13 suites (~345 checks) including the TV and end-to-end health suites,
+# which fail with a connection error if those servers are absent. The HLS suite
+# runs when a Chromium binary is available.
+#
+# Excluded, so a green check is not mistaken for full coverage:
+#   • the browser-UI suite — needs a Chromium binary AND a dev server whose
+#     VITE_API_URL points at the gate's API; run locally via pnpm verify:ui
+#   • the mobile suite — exports both native platforms, which is slow
+#   • the deployment suite — needs the hosted gateway and its certificate
 # ─────────────────────────────────────────────────────────────────────────────
 name: CI
 
@@ -60,7 +66,10 @@ jobs:
           pnpm build:tv
 
       - name: Release gate
-        run: node scripts/ci.mjs
+        # Starts the API, web and TV servers itself, then runs every suite that
+        # needs them. The browser-UI and mobile-bundling suites are excluded and
+        # said so in the workflow notes.
+        run: pnpm verify:ci
         env:
           CI: 'true'
 
