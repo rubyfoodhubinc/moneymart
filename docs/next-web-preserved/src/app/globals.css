@@ -1,0 +1,362 @@
+@import 'tailwindcss';
+@import '@moneymart/tokens/css';
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MoneyMart global stylesheet.
+   Tokens come from @moneymart/tokens (single source of truth). This file only
+   expresses layout, motion and premium surface treatment.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@theme inline {
+  --color-mm-gold: var(--mm-gold);
+  --color-mm-gold-deep: var(--mm-gold-deep);
+  --color-mm-navy: var(--mm-navy);
+  --color-mm-navy-deep: var(--mm-navy-deep);
+  --color-mm-green: var(--mm-green);
+  --color-mm-charcoal: var(--mm-charcoal);
+  --color-mm-error: var(--mm-error);
+
+  --color-surface-base: var(--mm-surface-base);
+  --color-surface-raised: var(--mm-surface-raised);
+  --color-surface-card: var(--mm-surface-card);
+  --color-line: var(--mm-border);
+  --color-line-strong: var(--mm-border-strong);
+  --color-divider: var(--mm-divider);
+
+  --color-ink: var(--mm-text-primary);
+  --color-ink-2: var(--mm-text-secondary);
+  --color-ink-3: var(--mm-text-tertiary);
+
+  --font-display: var(--mm-font-display);
+  --font-sans: var(--mm-font-body);
+  --font-data: var(--mm-font-data);
+
+  --radius-mm-sm: var(--mm-radius-sm);
+  --radius-mm-md: var(--mm-radius-md);
+  --radius-mm-lg: var(--mm-radius-lg);
+  --radius-mm-xl: var(--mm-radius-xl);
+  --radius-mm-pill: var(--mm-radius-pill);
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────── */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background-color: var(--mm-navy-deep);
+  color: var(--mm-text-primary);
+  font-family: var(--mm-font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+/* Ambient premium backdrop: navy depth + two soft brand glows. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 12% -8%, rgba(245, 166, 35, 0.13), transparent 62%),
+    radial-gradient(900px 560px at 92% 4%, rgba(0, 212, 161, 0.1), transparent 60%),
+    linear-gradient(180deg, #0a1520 0%, #070f18 62%, #060d14 100%);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--mm-font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: rgba(245, 166, 35, 0.32);
+  color: #fff;
+}
+
+/* ── Numerals: Space Grotesk for all data surfaces (§2.3) ──────────────── */
+
+.data {
+  font-family: var(--mm-font-data);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* ── Scrollbars ───────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(245, 166, 35, 0.28);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 166, 35, 0.46);
+  background-clip: content-box;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* ── Premium surface treatments ───────────────────────────────────────── */
+
+.glass {
+  background: linear-gradient(150deg, rgba(24, 42, 64, 0.78) 0%, rgba(15, 30, 46, 0.66) 100%);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--mm-border);
+}
+
+.card-surface {
+  position: relative;
+  background: linear-gradient(158deg, rgba(22, 41, 62, 0.92) 0%, rgba(15, 30, 46, 0.96) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: var(--mm-radius-lg);
+  overflow: hidden;
+}
+
+/* Light sheen that reads as premium glass without looking glossy. */
+.card-surface::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0) 46%);
+}
+
+.hairline {
+  border-top: 1px solid var(--mm-divider);
+}
+
+.gold-text {
+  background: linear-gradient(120deg, #ffd88a 0%, #f5a623 46%, #d98a0f 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ── Motion (§2.5) ────────────────────────────────────────────────────── */
+
+@keyframes mm-pulse-ring {
+  0% {
+    transform: scale(0.7);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+
+@keyframes mm-live-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
+
+@keyframes mm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mm-shimmer {
+  0% {
+    background-position: -560px 0;
+  }
+  100% {
+    background-position: 560px 0;
+  }
+}
+
+@keyframes mm-confetti-fall {
+  0% {
+    transform: translate3d(0, -12vh, 0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(var(--drift, 0px), 108vh, 0) rotate(760deg);
+    opacity: 0.9;
+  }
+}
+
+@keyframes mm-flip-in {
+  from {
+    transform: rotateY(-92deg);
+    opacity: 0;
+  }
+  to {
+    transform: rotateY(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes mm-scale-in {
+  from {
+    transform: scale(0.94);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes mm-bid-flash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(0, 212, 161, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 22px rgba(0, 212, 161, 0);
+  }
+}
+
+.animate-rise {
+  animation: mm-rise 0.5s var(--mm-ease-out) both;
+}
+.animate-scale-in {
+  animation: mm-scale-in 0.32s var(--mm-ease-out) both;
+}
+.animate-flip-in {
+  animation: mm-flip-in 0.4s var(--mm-ease-in-out) both;
+}
+.animate-live-blink {
+  animation: mm-live-blink 1.6s ease-in-out infinite;
+}
+.animate-bid-flash {
+  animation: mm-bid-flash 0.7s var(--mm-ease-out);
+}
+
+.pulse-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 2px solid var(--mm-green);
+  animation: mm-pulse-ring 1.8s ease-out infinite;
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.1) 50%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  background-size: 560px 100%;
+  animation: mm-shimmer 1.35s linear infinite;
+}
+
+.stagger > * {
+  animation: mm-rise 0.5s var(--mm-ease-out) both;
+}
+.stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.stagger > *:nth-child(2) { animation-delay: 0.06s; }
+.stagger > *:nth-child(3) { animation-delay: 0.1s; }
+.stagger > *:nth-child(4) { animation-delay: 0.14s; }
+.stagger > *:nth-child(5) { animation-delay: 0.18s; }
+.stagger > *:nth-child(6) { animation-delay: 0.22s; }
+.stagger > *:nth-child(7) { animation-delay: 0.26s; }
+.stagger > *:nth-child(8) { animation-delay: 0.3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ── Layout helpers ───────────────────────────────────────────────────── */
+
+.mm-container {
+  width: 100%;
+  max-width: var(--mm-container);
+  margin-inline: auto;
+  padding-inline: clamp(16px, 4vw, 48px);
+}
+
+.rail {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 4px;
+}
+.rail > * {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+}
+
+.clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

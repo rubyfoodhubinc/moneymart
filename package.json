@@ -1,0 +1,53 @@
+{
+  "name": "moneymart",
+  "private": true,
+  "version": "2.0.0",
+  "description": "MoneyMart \u2014 Bid. Stream. Win. Hybrid live-commerce + auction platform.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@swc/core",
+      "sharp",
+      "unrs-resolver"
+    ]
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "pnpm --filter @moneymart/api dev",
+    "dev:web": "pnpm --filter @moneymart/web dev",
+    "dev:mobile": "pnpm --filter @moneymart/mobile dev",
+    "build": "pnpm --filter @moneymart/api build && pnpm --filter @moneymart/web build",
+    "build:web": "pnpm --filter @moneymart/web build",
+    "start": "pnpm --filter @moneymart/web start",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "verify": "node scripts/verify-engine.mjs",
+    "start:prod": "bash scripts/start-web-prod.sh",
+    "health": "node scripts/health.mjs",
+    "deploy": "pnpm build:web && echo \"\\n  Production bundle ready in apps/web/dist\\n  Serve with: pnpm start:prod   (defaults to :3100)\\n\"",
+    "postinstall": "bash scripts/ensure-env.sh >/dev/null 2>&1 || true",
+    "verify:all": "node scripts/verify-all.mjs",
+    "verify:realtime": "node scripts/verify-realtime.mjs",
+    "verify:escrow": "node scripts/verify-escrow.mjs",
+    "dev:tv": "bash scripts/start-tv.sh",
+    "start:tv": "bash scripts/start-tv.sh",
+    "verify:tv": "node scripts/verify-tv.mjs",
+    "build:tv": "pnpm --filter @moneymart/tv build",
+    "deploy:local": "bash scripts/deploy-local.sh",
+    "verify:deploy": "node scripts/verify-deploy.mjs",
+    "verify:mobile": "node scripts/verify-mobile.mjs",
+    "brand": "node scripts/make-brand-assets.mjs",
+    "make-cert": "node scripts/make-cert.mjs",
+    "build:mobile:native": "pnpm --filter @moneymart/mobile export:native"
+  },
+  "devDependencies": {
+    "jsqr": "^1.4.0",
+    "qrcode-generator": "^2.0.4",
+    "socket.io-client": "^4.8.4",
+    "typescript": "^5.7.3"
+  }
+}

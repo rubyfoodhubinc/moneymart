@@ -1,0 +1,290 @@
+@import 'tailwindcss';
+@import '@moneymart/tokens/css';
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MoneyMart TV — 10-foot UI stylesheet (§7.2)
+
+   Hard requirements from the blueprint:
+     • minimum 32pt body text, 56pt section headings
+     • WCAG 2.1 AA contrast (Deep Navy + Pure White default pairing)
+     • focusable elements at least 200x80px on 1080p
+     • focus indicated by a 4px gold border with a subtle background highlight
+     • row-based composition, minimal modals
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* 10-foot typography scale, expressed in rem against a 16px root. */
+  --tv-body: 2rem; /* 32pt minimum body text */
+  --tv-body-lg: 2.25rem;
+  --tv-heading: 3.5rem; /* 56pt minimum section heading */
+  --tv-display: 4.5rem;
+  --tv-caption: 1.5rem;
+  --tv-overscan: 3.5rem;
+  --tv-focus-width: 4px;
+  --tv-target-h: 5rem; /* 80px minimum focus target height */
+  --tv-target-min-w: 12.5rem; /* 200px minimum focus target width */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden; /* TV apps never scroll the page; rows scroll internally. */
+  background: var(--mm-navy-deep);
+  color: #fff;
+  font-family: var(--mm-font-body);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100%;
+}
+
+/* TV browsers draw their own focus ring inconsistently — we own it entirely. */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: none;
+}
+
+.tv-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--tv-overscan);
+  gap: 2rem;
+  background:
+    radial-gradient(1400px 800px at 10% -10%, rgba(245, 166, 35, 0.12), transparent 60%),
+    radial-gradient(1200px 700px at 95% 5%, rgba(0, 212, 161, 0.1), transparent 60%),
+    linear-gradient(180deg, #0a1520 0%, #070f18 65%, #060d14 100%);
+}
+
+/* ── Typography ───────────────────────────────────────────────────────── */
+
+.tv-display {
+  font-family: var(--mm-font-display);
+  font-size: var(--tv-display);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.tv-heading {
+  font-family: var(--mm-font-display);
+  font-size: var(--tv-heading);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.tv-body {
+  font-size: var(--tv-body);
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.82);
+  margin: 0;
+}
+
+.tv-body-lg {
+  font-size: var(--tv-body-lg);
+  line-height: 1.4;
+}
+
+.tv-caption {
+  font-size: var(--tv-caption);
+  color: rgba(255, 255, 255, 0.55);
+  margin: 0;
+}
+
+.tv-data {
+  font-family: var(--mm-font-data);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* ── Focusable surfaces (§7.2) ────────────────────────────────────────── */
+
+.tv-focusable {
+  min-height: var(--tv-target-h);
+  min-width: var(--tv-target-min-w);
+  border-radius: 16px;
+  transition:
+    transform 160ms var(--mm-ease-out),
+    background 160ms var(--mm-ease-out),
+    box-shadow 160ms var(--mm-ease-out);
+  will-change: transform;
+}
+
+.tv-card {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(158deg, rgba(22, 41, 62, 0.94) 0%, rgba(15, 30, 46, 0.97) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.tv-card--focused {
+  transform: scale(1.035);
+  box-shadow:
+    0 0 0 var(--tv-focus-width) var(--mm-gold),
+    0 24px 60px rgba(0, 0, 0, 0.6);
+  z-index: 5;
+}
+
+.tv-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.tv-pill--live {
+  border-color: rgba(0, 212, 161, 0.5);
+  background: rgba(0, 212, 161, 0.16);
+  color: var(--mm-green);
+}
+
+.tv-pill--gold {
+  border-color: rgba(245, 166, 35, 0.45);
+  background: rgba(245, 166, 35, 0.14);
+  color: var(--mm-gold);
+}
+
+/* ── Rows: the only TV composition pattern (§7.2) ─────────────────────── */
+
+.tv-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.tv-row__track {
+  display: flex;
+  gap: 1.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5rem 0.25rem 1.5rem;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+.tv-row__track::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Live pulse (§2.5) ────────────────────────────────────────────────── */
+
+@keyframes tv-pulse {
+  0% {
+    transform: scale(0.7);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+.tv-live-dot {
+  position: relative;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--mm-green);
+}
+.tv-live-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 2px solid var(--mm-green);
+  animation: tv-pulse 1.8s ease-out infinite;
+}
+
+/* ── QR bridge (§7.3) ─────────────────────────────────────────────────── */
+
+.tv-qr {
+  background: #fff;
+  padding: 1rem;
+  border-radius: 12px;
+  image-rendering: pixelated;
+  width: 15rem;
+  height: 15rem;
+}
+
+.tv-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 15, 24, 0.9);
+  backdrop-filter: blur(14px);
+  display: flex;
+  padding: var(--tv-overscan);
+  gap: 3rem;
+  z-index: 50;
+}
+
+/* ── Modals: maximum one action prompt per state (§7.2) ───────────────── */
+
+.tv-confirm {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 15, 24, 0.86);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.tv-confirm__panel {
+  background: linear-gradient(158deg, rgba(22, 41, 62, 0.98), rgba(15, 30, 46, 0.99));
+  border: 1px solid rgba(245, 166, 35, 0.3);
+  border-radius: 22px;
+  padding: 3rem;
+  max-width: 60rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.tv-actions {
+  display: flex;
+  gap: 1.5rem;
+}
+
+/* Skeleton shimmer for loading states. */
+@keyframes tv-shimmer {
+  0% {
+    background-position: -800px 0;
+  }
+  100% {
+    background-position: 800px 0;
+  }
+}
+.tv-skeleton {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.05) 100%);
+  background-size: 800px 100%;
+  animation: tv-shimmer 1.4s linear infinite;
+  border-radius: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

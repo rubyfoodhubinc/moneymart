@@ -1,0 +1,11 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "services/*"
+
+# pnpm v11 build-script approvals. esbuild is required by tsx (API hot reload).
+allowBuilds:
+  esbuild: true
+  "@swc/core": true
+  sharp: true
+  unrs-resolver: true

@@ -1,0 +1,49 @@
+{
+  "name": "@moneymart/mobile",
+  "version": "2.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "dev": "expo start",
+    "dev:web": "expo start --web",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "typecheck": "tsc --noEmit",
+    "export:native": "expo export --platform ios --platform android --output-dir .export",
+    "export:ios": "expo export --platform ios --output-dir .export",
+    "export:android": "expo export --platform android --output-dir .export",
+    "prebuild:check": "expo config --type public"
+  },
+  "dependencies": {
+    "@expo-google-fonts/inter": "^0.4.0",
+    "@expo-google-fonts/space-grotesk": "^0.4.0",
+    "@expo/metro-runtime": "~5.0.4",
+    "@moneymart/tokens": "workspace:*",
+    "@moneymart/types": "workspace:*",
+    "@react-native-async-storage/async-storage": "2.1.2",
+    "@react-navigation/bottom-tabs": "^7.2.0",
+    "@react-navigation/native": "^7.0.14",
+    "@react-navigation/native-stack": "^7.2.0",
+    "expo": "~53.0.0",
+    "expo-constants": "~17.1.8",
+    "expo-font": "~13.3.2",
+    "expo-haptics": "~14.1.4",
+    "expo-linear-gradient": "~14.1.5",
+    "expo-status-bar": "~2.2.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-native": "0.79.6",
+    "react-native-gesture-handler": "~2.24.0",
+    "react-native-reanimated": "~3.17.4",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-screens": "~4.11.1",
+    "react-native-svg": "15.11.2",
+    "react-native-web": "^0.20.0",
+    "socket.io-client": "^4.8.1",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@types/react": "~19.0.10",
+    "typescript": "~5.8.3"
+  }
+}

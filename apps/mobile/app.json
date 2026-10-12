@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "MoneyMart",
+    "slug": "moneymart",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "scheme": "moneymart",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0D1B2A"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.moneymart.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "MoneyMart uses your camera to photograph items you are listing and to verify your identity.",
+        "NSPhotoLibraryUsageDescription": "MoneyMart needs access to your photos so you can add item images to a listing.",
+        "NSMicrophoneUsageDescription": "MoneyMart uses the microphone when you go live in a stream."
+      },
+      "buildNumber": "1",
+      "icon": "./assets/icon.png"
+    },
+    "android": {
+      "package": "com.moneymart.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/monochrome-icon.png",
+        "backgroundColor": "#0D1B2A"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "RECORD_AUDIO",
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
+      ],
+      "versionCode": 1
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/icon.png"
+    },
+    "plugins": [
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "apiUrl": "http://127.0.0.1:4317"
+    },
+    "description": "MoneyMart \u2014 Bid. Stream. Win. Live creator auctions, traditional auction house sales and a verified secondary marketplace.",
+    "icon": "./assets/icon.png",
+    "primaryColor": "#0D1B2A"
+  }
+}

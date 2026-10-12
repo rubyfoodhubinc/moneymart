@@ -1,0 +1,50 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+.next/
+dist/
+out/
+build/
+.turbo/
+*.tsbuildinfo
+
+# expo / metro
+.expo/
+.expo-shared/
+web-build/
+# expo export output (native Hermes bundles) — rebuild with pnpm build:mobile:native
+.export/
+.export-probe/
+
+# env
+.env
+.env.local
+.env*.local
+# per-environment files are committed deliberately: they contain only public
+# VITE_ variables (an API URL), never credentials. Real secrets live in the
+# hosting provider's environment, mirrored in .env.example.
+
+# local TLS material — contains a PRIVATE KEY, never commit
+.certs/
+
+# tooling caches
+.npm-cache/
+.npm/
+
+# logs & runtime
+*.log
+npm-debug.log*
+logs/
+.jobs/
+.tmp/
+
+# os
+.DS_Store
+Thumbs.db
+
+# editors
+.idea/
+.vscode/*
+!.vscode/extensions.json

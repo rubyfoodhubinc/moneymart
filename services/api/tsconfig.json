@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "outDir": "dist",
+    "noEmit": true,
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@moneymart/tokens": [
+        "../../packages/tokens/src/index.ts"
+      ],
+      "@moneymart/types": [
+        "../../packages/types/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts"
+  ]
+}
