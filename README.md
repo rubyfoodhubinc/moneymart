@@ -33,6 +33,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Mobile photos** | ✅ Picker-to-API conversion verified against the real validator; camera/library needs a device |
 | **Mobile selling** | ✅ Captures real photographs — camera and gallery — into listings and the avatar |
 | **Account settings** | ✅ Preferences persist server-side; data export is a real, scoped download |
 | **Concurrency** | ✅ Overlapping bids, simultaneous settlement and closes verified consistent |
@@ -41,7 +42,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **709 automated checks** across 24 suites — `pnpm verify:all` |
+| **Verification** | ✅ **735 automated checks** across 25 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -128,7 +129,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  709 passed   0 failed
+  TOTAL  735 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -145,6 +146,7 @@ pnpm verify:dispute    # admin-only resolution, refund, seller-favourable releas
 pnpm verify:restart    # escrow, disputes and payouts across a process restart (33)
 pnpm verify:concurrency # overlapping bids, simultaneous settlement, races a close (25)
 pnpm verify:preferences # settings persist, invalid input refused, export scoped (36)
+pnpm verify:mobile-photos # picker-to-API conversion against the real validator (26)
 pnpm verify:delivery   # the sent code is the verified code; senders and failures (31)
 pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (47)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
@@ -569,6 +571,53 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## The mobile photo path, verified against the real API
+
+I had flagged mobile as unverifiable for three rounds, so I checked what hardware
+actually exists: **Xcode 27, twelve iOS simulators (two already booted), an Android
+SDK, 676 GB free.** A native project generates cleanly and the `expo-image-picker`
+config plugin **demonstrably works** — it injected `NSCameraUsageDescription` and
+`NSPhotoLibraryUsageDescription` into the generated `Info.plist`.
+
+The build cannot *complete* here because **CocoaPods is not installed**. That is a
+real constraint, stated rather than assumed.
+
+So I verified the part that actually breaks. The picker-asset-to-API conversion was
+written twice, once per screen; it now lives in **one module both use** and which has
+no React Native imports, so it runs in Node and is tested against a **real gateway**.
+
+### The defect it found
+
+**The client measured the wrong thing.** The API checks `value.length` on the
+submitted string — the whole data URI — *before* decoding. The client measured **raw
+bytes**. A 2.4 MB photograph is comfortably under the 3 MB ceiling as a file and
+**3.2 MB once base64 adds its third**, so it passed the local check and the server
+refused it:
+
+```
+client: accepted (2.40 MB raw)
+server: 400 An image may not exceed 3 MB.
+```
+
+On a phone that is an unexplained rejection after choosing a full-size photo. The
+ceiling is now applied to the **encoded** value — the same number the server uses —
+and asserted in *both* directions.
+
+### Also verified against the real validator
+
+`image/jpg` normalised to `image/jpeg` · a declared type disagreeing with the bytes
+is caught · an unsupported type is re-declared rather than passed through so the byte
+sniff decides · a URI-only asset is forwarded, not fabricated · five degenerate
+assets refused locally with phone-appropriate reasons · the twenty-image count
+guarded before the API must refuse.
+
+The suite **ends by stating what it does not cover** — the camera and library are not
+opened — rather than implying coverage it lacks.
+
+Prebuild output is now gitignored: it is generated from `app.json` and its plugins,
+so committing it would freeze one prebuild's Podfiles and hide where the
+configuration lives.
 
 ## The mobile app could not create a listing
 
