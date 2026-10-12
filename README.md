@@ -23,7 +23,8 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Repository** | ✅ https://github.com/rubyfoodhubinc/moneymart |
 | **Payments & escrow** | ✅ Provider-abstracted rails + enforced hold/release state machine |
 | **Memberships** | ✅ RevenueCat entitlements — Pro pricing 10%/15% enforced server-side |
-| **Verification** | ✅ **200 automated checks** across 8 suites — `pnpm verify:all` |
+| **Live video** | ✅ Real HLS in the stream room — proven decoding in headless Chrome |
+| **Verification** | ✅ **236 automated checks** across 9 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -88,8 +89,8 @@ missing asset returning `404` instead of silently serving the shell.
 ### Verify everything
 
 ```bash
-pnpm verify:all                  # 165 checks across 7 suites — the release gate
-MM_MOBILE_SUITE=1 pnpm verify:all  # 207 checks — adds the native mobile build
+pnpm verify:all                            # 177 checks across 8 suites — the release gate
+MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 236 — adds browser + native checks
 ```
 
 ```
@@ -101,11 +102,13 @@ MM_MOBILE_SUITE=1 pnpm verify:all  # 207 checks — adds the native mobile build
   PASS  Payments & escrow (§9.1)               31 passed
   PASS  TV / IPTV (§7)                         35 passed
   PASS  Payments & membership                  35 passed
+  PASS  HLS playback (real browser)            29 passed
+  PASS  Payments & membership                  35 passed
   PASS  Mobile (native build)                   42 passed
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  200 passed   0 failed
+  TOTAL  236 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -116,6 +119,7 @@ pnpm verify            # engine rules over REST (31)
 pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
+pnpm verify:hls        # real Chrome decodes every resolver manifest (29)
 pnpm verify:subscriptions  # providers, identity guard, entitlements, Pro pricing (35)
 pnpm verify:mobile     # icons, store identity, Hermes bundles, QR deep link (42)
 pnpm verify:deploy     # TLS, single origin, cache, TV isolation (28, needs deploy:local)
@@ -267,6 +271,43 @@ Connect. The stub says so rather than pretending otherwise.
 Until a key is present the `SimulatedProvider` runs the identical lifecycle, so
 the flow is never dead-ended. Declines are reproducible on demand (amount ending
 `.13`).
+
+## Live video (§5.3)
+
+The seeded streams previously pointed at `https://stream.moneymart.demo` — a host
+that does not resolve, so every room rendered a failed player. Playback is now
+resolved **server-side** by `engine/playback.ts`, which honours a real stored
+manifest, then a configured default, then a public demo manifest for live rooms,
+and reports a mode of `live | demo | offline`.
+
+That mode is the point: a demo manifest is labelled **DEMO STREAM** in the
+player chrome and a room that is not live resolves to `offline` with no URL, so a
+client shows the poster instead of a broken element.
+
+`HlsPlayer` (web) and `TvHlsPlayer` (TV) cover both browser paths — native HLS on
+Safari/iOS, hls.js with Media Source Extensions on Chromium/Firefox including
+Tizen and webOS. hls.js is imported **lazily**, so its ~400 KB never enters the
+initial bundle for anyone who does not open a room. Autoplay starts muted
+because browsers refuse audible autoplay; unmuting is an explicit action. Fatal
+network and media errors are retried a bounded number of times so a transient
+segment failure does not end the room.
+
+### Playback is proven, not assumed
+
+```bash
+pnpm verify:hls     # drives real Chrome; 29 checks over every resolver manifest
+```
+
+A typecheck cannot catch a dead host, CORS on a manifest, or a refused codec. The
+suite drives the **hls.js bundle the app actually ships** and reads back what the
+media element did:
+
+| | mux x36xhzz | mux pts_shift | unified-streaming |
+|---|---|---|---|
+| renditions | 5 (up to 1080p) | 4 (up to 720p) | 5 (up to 750p) |
+| decoded at | 1920x1080 | 1280x720 | 1680x750 |
+| buffered | 100s | 108s | 208s |
+| playback | t=13.6s | t=15.3s | t=14.0s |
 
 ## Memberships (§10 Pro pricing)
 
