@@ -27,8 +27,9 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Studio** | ✅ Drag-to-reorder sections + seller photo reordering (§5.2) |
 | **Authentication** | ✅ Passwordless OTP on REST **and** the realtime layer — writes require a verified identity |
 | **Persistence** | ✅ Postgres snapshotting — data survives redeploys (proven in production) |
+| **Authorization** | ✅ Object-level checks — orders private to participants, storefront writes owner-scoped |
 | **Rate limiting** | ✅ Ingress limits on the message-sending and write paths |
-| **Verification** | ✅ **375 automated checks** across 14 suites — `pnpm verify:all` |
+| **Verification** | ✅ **399 automated checks** across 15 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -115,7 +116,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  375 passed   0 failed
+  TOTAL  399 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -127,6 +128,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
+pnpm verify:authorization  # order privacy, storefront ownership, id guessing (24)
 pnpm verify:rate-limit # OTP flood, IP rotation, dev controls in production (19)
 pnpm verify:socket-auth  # anonymous writes refused, identities not spoofable (15)
 pnpm verify:persistence  # restart round-trip, corrupt-snapshot recovery, opt-out (20)
@@ -402,6 +404,47 @@ auth: {"demoHeader": false}
 Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
+
+## Object-level authorization
+
+Authentication asks **who you are**. It does not answer whether you may touch a
+particular object — and two endpoints never asked. Both defects were of that
+shape: the caller was genuinely signed in, and the route simply never checked
+whether the object was theirs.
+
+| Endpoint | Was | Now |
+|---|---|---|
+| `GET /api/orders/:id` | any signed-in caller could read **any** order | buyer or seller only |
+| `GET /api/orders/:id/escrow` | same | buyer or seller only |
+| `POST /api/orders/:id/status` | same, and could forge fulfilment | **seller only** |
+| `PUT /api/storefronts` | `handle` from the body → **overwrite any creator's shop** | the caller's own handle |
+
+Demonstrated before the fix, from an unrelated account:
+
+```
+GET /api/orders/ord_seed_1 → 200
+  buyerId usr_you · sellerId usr_jules · total 1148.55
+  delivery address present · tracking DHL7741 2290 8834
+
+PUT /api/storefronts {"handle":"adaluxe", …} → 200
+  victim storefront renamed to "PWNED BY ANOTHER USER"
+```
+
+**An id is not a secret.** Order ids appear in URLs, notifications and support
+conversations, and a creator's handle is public by design — so an endpoint that
+treats knowing an id as authorization is open to anyone.
+
+Two details that matter:
+
+- **Non-participants get 404, not 403.** A 403 confirms the id exists; unknown
+  ids and other people's ids are now indistinguishable, which the suite asserts.
+- **Fulfilment is seller-only.** A buyer marking their own order shipped would
+  defeat escrow, since release depends on dispatch having happened.
+
+Escrow actions (`pay`, `confirm`, `dispute`) were already party-correct —
+enforced inside the escrow service, including that the **seller cannot release
+their own funds**. They are now covered by assertions rather than left to
+inspection.
 
 ## Rate limiting
 
