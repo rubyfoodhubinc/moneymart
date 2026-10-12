@@ -21,18 +21,22 @@ import type {
   PricePoint,
 } from '@moneymart/types';
 
+import { apiOrigin } from '@/lib/config';
+
 /**
- * API origin.
+ * API origin for the current session.
  *
- * Resolved at build time by Vite (only `VITE_`-prefixed variables reach client
- * code). When the variable is empty or absent the API is assumed to share the
- * page's origin, which is how the platform is deployed: one host serves the SPA
- * and the gateway, so there is no CORS surface and a single TLS certificate
- * covers REST, WebSocket and the app itself.
+ * Read per request rather than captured at module load, so a runtime override
+ * (see lib/config.ts) takes effect without a rebuild. An empty value means the
+ * gateway shares the page origin — the unified deployment.
  */
-export const API_URL: string =
-  import.meta.env.VITE_API_URL ||
-  (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:4317');
+export function apiBase(): string {
+  const origin = apiOrigin();
+  return origin || (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:4317');
+}
+
+/** @deprecated Prefer `apiBase()`; kept for display and diagnostics. */
+export const API_URL: string = apiBase();
 
 export class ApiError extends Error {
   status: number;
@@ -46,7 +50,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     ...init,
     cache: 'no-store',
     headers: {

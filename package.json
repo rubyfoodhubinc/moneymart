@@ -42,7 +42,9 @@
     "verify:mobile": "node scripts/verify-mobile.mjs",
     "brand": "node scripts/make-brand-assets.mjs",
     "make-cert": "node scripts/make-cert.mjs",
-    "build:mobile:native": "pnpm --filter @moneymart/mobile export:native"
+    "build:mobile:native": "pnpm --filter @moneymart/mobile export:native",
+    "verify:production": "node scripts/verify-deploy.mjs --url https://moneymart-production.up.railway.app",
+    "deploy:railway": "railway up -y -d --service moneymart"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

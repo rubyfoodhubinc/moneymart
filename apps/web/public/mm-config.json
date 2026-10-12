@@ -1,0 +1,11 @@
+{
+  "//": "MoneyMart runtime configuration. Fetched from /mm-config.json at boot, BEFORE the first API request, so one build can be pointed at different backends without rebuilding. An empty apiUrl means 'same origin as this page' (the unified deployment).",
+  "//apiUrl": "Production web on Vercel calls the Railway gateway. Override per environment by editing this file in the deployment, or at runtime with ?api=<url> or the diagnostics panel.",
+  "apiUrl": "https://moneymart-production.up.railway.app",
+  "revenueCat": {
+    "iosKey": "",
+    "androidKey": ""
+  },
+  "preferredProviders": ["stripe", "paypal"],
+  "demoHlsUrl": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+}

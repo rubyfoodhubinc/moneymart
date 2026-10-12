@@ -71,11 +71,62 @@ const http = tlsEnabled
     )
   : createServer(app);
 
-app.use(cors({ origin: true, credentials: true }));
+/**
+ * Cross-origin policy.
+ *
+ * The unified deployment is same-origin and never exercises this. It exists for
+ * the split deployment — the web app on Vercel calling the gateway on Railway —
+ * where the browser sends an Origin the gateway must actively allow.
+ *
+ * `origin: true` reflects whatever Origin arrives, and combined with credentials
+ * that lets any site issue authenticated requests. So the allowlist is explicit:
+ * MM_ALLOWED_ORIGINS (comma-separated), plus the platform's own domain, plus
+ * localhost in development. Same-origin and origin-less requests (native apps,
+ * server-to-server, health probes) are always permitted.
+ */
+const allowedOrigins = new Set(
+  [
+    ...(process.env.MM_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+    'https://www.moneymart.app',
+    'https://moneymart.app',
+    'https://moneymart.vercel.app',
+    ...(process.env.RAILWAY_PUBLIC_DOMAIN ? [`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`] : []),
+    ...(process.env.NODE_ENV === 'production'
+      ? []
+      : ['http://127.0.0.1:3000', 'http://localhost:3000', 'http://127.0.0.1:3100', 'http://127.0.0.1:3200']),
+  ].map((value) => value.replace(/\/$/, '')),
+);
+
+function corsOrigin(
+  origin: string | undefined,
+  callback: (error: Error | null, allow?: boolean | string) => void,
+): void {
+  // Native clients, curl and the health probe send no Origin.
+  if (!origin) {
+    callback(null, true);
+    return;
+  }
+  const normalised = origin.replace(/\/$/, '');
+  if (allowedOrigins.has(normalised)) {
+    callback(null, normalised);
+    return;
+  }
+  // Vercel preview deployments use per-build hostnames.
+  if (/\.vercel\.app$/.test(normalised) && process.env.MM_ALLOW_VERCEL_PREVIEWS !== 'false') {
+    callback(null, normalised);
+    return;
+  }
+  callback(new Error(`origin_not_allowed:${normalised}`), false);
+}
+
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json({ limit: '2mb' }));
 
 const io = new SocketServer<ClientToServerEvents, ServerToClientEvents>(http, {
-  cors: { origin: true, credentials: true },
+  cors: { origin: corsOrigin, credentials: true },
   path: '/socket.io',
 });
 
@@ -1313,7 +1364,20 @@ const staticResult = mountStaticHost(app, {
 
 /* ── Error handling ────────────────────────────────────────────────────── */
 
-app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
+app.use((error: Error, req: Request, res: Response, _next: NextFunction) => {
+  /**
+   * A rejected Origin is a policy refusal, not a server fault. The browser blocks
+   * the response either way because the CORS headers are absent, but answering
+   * 403 keeps it out of error tracking and stops the message being reported as a
+   * crash — and the message is logged without a stack, since it is expected.
+   */
+  if (error.message.startsWith('origin_not_allowed:')) {
+    const origin = error.message.slice('origin_not_allowed:'.length);
+    console.warn(`[moneymart-api] refused cross-origin request from ${origin} to ${req.path}`);
+    res.status(403).json({ error: 'origin_not_allowed', detail: origin });
+    return;
+  }
+
   console.error('[moneymart-api] unhandled', error);
   res.status(500).json({ error: 'internal_error', detail: error.message });
 });
@@ -1330,6 +1394,7 @@ http.listen(PORT, () => {
   console.log(`  REST + WebSocket  →  ${tlsEnabled ? 'https' : 'http'}://127.0.0.1:${PORT}`);
   console.log(`  Live streams: ${live.length}   Live auctions: ${auctions.active().length}   Users: ${users.all().length}`);
   console.log(`  Anti-snipe: ${ANTI_SNIPE.triggerWindowMs / 1000}s window → +${ANTI_SNIPE.extensionMs / 1000}s`);
+  console.log(`  CORS allowlist: ${allowedOrigins.size} explicit origin(s), vercel previews ${process.env.MM_ALLOW_VERCEL_PREVIEWS === 'false' ? 'blocked' : 'allowed'}`);
   if (staticResult.mounted.length) {
     console.log('  Serving clients:');
     staticResult.mounted.forEach((entry) => console.log(`    ${entry}`));
