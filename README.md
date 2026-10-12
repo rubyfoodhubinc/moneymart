@@ -33,12 +33,13 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Concurrency** | ✅ Overlapping bids, simultaneous settlement and closes verified consistent |
 | **Durability** | ✅ Escrow, disputes and payouts survive a restart; the loss window is measured |
 | **Disputes** | ✅ Admin-only resolution; a refund returns funds, and neither branch can double-pay |
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **641 automated checks** across 22 suites — `pnpm verify:all` |
+| **Verification** | ✅ **666 automated checks** across 23 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -125,7 +126,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  641 passed   0 failed
+  TOTAL  666 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -140,6 +141,7 @@ pnpm verify:auth       # OTP flow, canonicalisation, refusals, production postur
 pnpm verify:lifecycle  # listing → bid → settle → pay → escrow → release → books (36)
 pnpm verify:dispute    # admin-only resolution, refund, seller-favourable release (30)
 pnpm verify:restart    # escrow, disputes and payouts across a process restart (33)
+pnpm verify:concurrency # overlapping bids, simultaneous settlement, races a close (25)
 pnpm verify:delivery   # the sent code is the verified code; senders and failures (31)
 pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (47)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
@@ -564,6 +566,38 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## Concurrency across auctions
+
+Every other suite drives one trade at a time. The engine has **no mutex and no
+queue**, which is correct for Node's single thread *only if no handler awaits
+mid-mutation* — an assumption about the shape of the code. The way to test it is to
+fire overlapping work and check the books.
+
+```bash
+pnpm verify:concurrency   # 25 checks
+```
+
+| Overlap | What breaks if the assumption is wrong |
+|---|---|
+| 20 bidders, one lot, at once | duplicate amounts, a ladder out of order, a lost increment |
+| 5 lots settling in the **same heartbeat** | a double order, an order for the wrong buyer, cross-contamination |
+| 5 buyers paying simultaneously | an order reaching escrow twice, or not at all |
+| a bid racing a lot's close | a bid accepted after settlement, at a price nobody agreed to |
+
+**The engine was consistent under all of it, with no code change.** Five lots
+settled in one heartbeat produced exactly one order each, at its own hammer price,
+with no leakage; overlapping bids left an ordered ladder with no duplicate amount
+and the leader holding the top; a late bid was refused and received no order; and
+afterwards no escrow had released beyond what it held.
+
+One production-adjacent change: the address and verification rate-limit **ceilings**
+are now overridable by environment, because a suite creating thirty-plus accounts
+in one run trips limits it is not testing. The **subject** caps are deliberately not
+overridable — those guard a single inbox or number — and the defaults (20, 30, 600)
+are unchanged, with none of the overrides present in the deployed environment.
+Verified against production after deploying: the per-subject cap still answers
+`200 200 200 200 200 429 429 429`.
 
 ## A restart with money in flight
 
