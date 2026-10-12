@@ -686,6 +686,29 @@ All fixed in the scripts that exist to fix them:
 
 Full audit green in the new layout: **735 passed, 0 failed.**
 
+## Known outstanding work
+
+Recorded plainly, because a green summary that hides these would be misleading.
+
+| Item | State |
+|---|---|
+| **Lot cards expose no accessibility label** | **Product defect.** The feed's cards carry no addressable element, so a screen reader cannot describe a lot and a UI test cannot open one. The fix belongs in the card component (a label from the lot's title and price). |
+| Mobile **bid** and **sell/photo** flows | Unverified by tap. Blocked behind the card-label defect for the bid; the photo path's conversion logic is verified against the real API but the camera/library itself is not. |
+| Twilio credentials | Not supplied — SMS codes are generated but cannot be sent. **Email sign-in works.** |
+| 4 IONOS DNS records | Not added — a branded sender address is cosmetic; `mail.everystudio.app` works today. |
+| `www.moneymart.app` | Not pointed at the deployment. |
+| Vercel deployment | Needs `vercel login` in a browser. |
+| Real payment credentials | Stripe/PayPal/Paystack adapters are wired and select per currency; without keys the simulated rail is used, which is a working rail rather than a stub. |
+
+### A machine-level regression late in the session
+
+Two suites — **Social sign-in** and **Production product smoke** — began failing on this
+host with `setTypeOfService EINVAL` from Node's undici, a socket-option call the OS refused.
+Both passed earlier the same day (47 and 21 checks), a plain `fetch` to the same host still
+returns 200, and **both the CI release gate and the production deploy check pass**. It is an
+environment fault on this machine, not a product one, and it appeared after the tooling
+installs this session required.
+
 ## Driving the mobile app with a real UI test
 
 Every previous check on the mobile app was **structural** (the bundle contains a screen)
