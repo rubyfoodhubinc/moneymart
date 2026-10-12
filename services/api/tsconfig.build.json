@@ -1,0 +1,21 @@
+{
+  "//": "Production build. Emits plain JavaScript so the container runs no TypeScript loader.",
+  "//rootDir": "Pinned to the workspace root because the API imports the shared @moneymart/tokens and @moneymart/types sources, which live outside services/api. That makes the emitted tree mirror the repo layout, so the entry point is dist/services/api/src/index.js.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "outDir": "dist",
+    "rootDir": "../..",
+    "sourceMap": true,
+    "declaration": false,
+    "noEmit": false,
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../packages/tokens/src/**/*.ts",
+    "../../packages/types/src/**/*.ts"
+  ]
+}

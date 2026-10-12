@@ -57,6 +57,7 @@ RUN bash scripts/ensure-env.sh >/dev/null 2>&1 || true
 # page origin at runtime. No VITE_API_URL is baked in.
 ENV VITE_API_URL=
 RUN pnpm --filter @moneymart/tokens build 2>/dev/null || true \
+ && pnpm --filter @moneymart/api build \
  && pnpm --filter @moneymart/web build \
  && pnpm --filter @moneymart/tv build
 
@@ -89,5 +90,6 @@ WORKDIR /repo/services/api
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4317)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# tsx runs the TypeScript gateway directly, matching how the suite exercises it.
-CMD ["node", "/repo/node_modules/tsx/dist/cli.mjs", "src/index.ts"]
+# The API is compiled to plain JavaScript at build time, so the runtime needs no
+# TypeScript loader and no dev dependencies.
+CMD ["node", "/repo/services/api/dist/services/api/src/index.js"]
