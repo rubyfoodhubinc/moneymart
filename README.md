@@ -27,7 +27,8 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Studio** | ✅ Drag-to-reorder sections + seller photo reordering (§5.2) |
 | **Authentication** | ✅ Passwordless OTP on REST **and** the realtime layer — writes require a verified identity |
 | **Persistence** | ✅ Postgres snapshotting — data survives redeploys (proven in production) |
-| **Verification** | ✅ **356 automated checks** across 13 suites — `pnpm verify:all` |
+| **Rate limiting** | ✅ Ingress limits on the message-sending and write paths |
+| **Verification** | ✅ **375 automated checks** across 14 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -114,7 +115,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  356 passed   0 failed
+  TOTAL  375 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -126,6 +127,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
+pnpm verify:rate-limit # OTP flood, IP rotation, dev controls in production (19)
 pnpm verify:socket-auth  # anonymous writes refused, identities not spoofable (15)
 pnpm verify:persistence  # restart round-trip, corrupt-snapshot recovery, opt-out (20)
 pnpm verify:ui         # real Chrome: pages mount, drag handles, keyboard reorder (22)
@@ -400,6 +402,51 @@ auth: {"demoHeader": false}
 Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
+
+## Rate limiting
+
+Measured against production before this existed: **eight consecutive OTP requests
+all returned 200**. Each is a billable SMS once a provider is configured, so the
+endpoint was an open door to SMS-bombing toll fraud, to using the platform as a
+free SMS gateway, and to account enumeration.
+
+| Endpoint | Address cap | Subject cap |
+|---|---|---|
+| `POST /api/auth/request` | 20 / 15 min | **5 / 15 min per identifier** |
+| `POST /api/auth/verify` | 30 / 15 min | — |
+| `POST /api/auctions` | 30 / hour | — |
+| `/api/webhooks/*` | 300 / min | — |
+| everything | 600 / min | — |
+
+Four choices that decide whether a limiter actually helps:
+
+- **Sliding windows, not fixed buckets.** A fixed window lets an attacker send a
+  full allowance at the end of one window and again at the start of the next,
+  doubling the effective burst exactly when it matters.
+- **Address *and* subject.** An address cap is defeated by rotating addresses; a
+  subject cap alone lets one address walk a list of phone numbers. Verified that
+  a client-supplied `X-Forwarded-For` does **not** shift the bucket, because
+  `trust proxy` is set.
+- **Buckets are swept.** A unique key per attacker address is itself a
+  memory-exhaustion vector, and a limiter that can be used to exhaust memory is
+  worse than none.
+- **Refusals are actionable**: `429` with `Retry-After` and `RateLimit-Limit`, and
+  successful responses advertise the remaining allowance so a client can back off
+  *before* being refused.
+
+Two defects in my own first attempt, both caught by testing rather than reading:
+the subject cap **reused the address cap**, so it enforced nothing distinct —
+`subjectMax` is now required whenever a subject is declared and the policy throws
+at construction without it. And my refusal test used a unique identifier per
+request, so it never exercised the limit it was checking.
+
+Verified against live production:
+
+```
+200 200 200 200 200 429 429 429 429   ← was 8/8 successful
+other@example.com → 200               ← unrelated subjects unaffected
+/api/dev/rate-limit/reset → 403       ← clearing limits would be a bypass
+```
 
 ## Persistence
 
