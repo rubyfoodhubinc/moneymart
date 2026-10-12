@@ -29,6 +29,7 @@ import { providerRegistry } from './engine/payments.js';
 import { qrToSvgDataUri } from './lib/qr.js';
 import { mountStaticHost } from './lib/staticHost.js';
 import { createPersistence, shouldSeed } from './lib/persistence.js';
+import { rateLimit, POLICIES, limiterStatus, resetRateLimits, startLimiterSweep } from './lib/rateLimit.js';
 import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
 import { authService } from './engine/auth.js';
 import { resolveStreamPlayback } from './engine/playback.js';
@@ -128,6 +129,20 @@ function corsOrigin(
 
 app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json({ limit: '2mb' }));
+
+/**
+ * Rate limiting.
+ *
+ * Applied after the body parser so the auth policies can key on the submitted
+ * identifier, and in order of increasing specificity: a floor for the whole API,
+ * then tight limits on the endpoints that send messages or create records.
+ * Without this, eight consecutive OTP requests all succeeded in production — and
+ * each is a billable SMS once a provider is configured.
+ */
+app.use(rateLimit(POLICIES.global));
+app.use('/api/auth/request', rateLimit(POLICIES.authRequest));
+app.use('/api/auth/verify', rateLimit(POLICIES.authVerify));
+app.use('/api/webhooks', rateLimit(POLICIES.webhook));
 
 const io = new SocketServer<ClientToServerEvents, ServerToClientEvents>(http, {
   cors: { origin: corsOrigin, credentials: true },
@@ -525,7 +540,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
      * switched off) rather than 401 (you are not signed in). Both refuse the
      * request; the specific answer is more useful to the caller.
      */
-    const isSelfGated = req.path === '/api/session';
+    /**
+     * Self-gated routes: they answer 403 rather than 401 when the control is
+     * switched off, which names the real reason. `/api/dev/*` is included because
+     * every dev endpoint already refuses in production, so a 401 from the guard
+     * would mask the more specific answer.
+     */
+    const isSelfGated = req.path === '/api/session' || req.path.startsWith('/api/dev/');
 
     if (needsIdentity && !isSelfGated && !actorId(req)) {
       res.status(401).json({ error: 'not_authenticated', detail: 'Provide an Authorization: Bearer token.' });
@@ -786,7 +807,7 @@ app.post('/api/auctions/:id/auto-bid/off', (req, res) => {
 });
 
 /** §5.2 Selling Flow — create a listing. */
-app.post('/api/auctions', (req, res) => {
+app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
   const body = req.body as {
     title: string;
     description: string;
@@ -1078,6 +1099,22 @@ app.post('/api/webhooks/revenuecat', (req, res) => {
   });
 
   res.json({ ok: true, applied: true, subscription });
+});
+
+/**
+ * Dev-only rate-limit reset.
+ *
+ * The verification suites deliberately drive endpoints to their limits, so a
+ * previous run must not consume the next one's allowance. Refused in production
+ * like the other dev controls — clearing limits there would be a bypass.
+ */
+app.post('/api/dev/rate-limit/reset', (_req, res) => {
+  if (process.env.NODE_ENV === 'production' && process.env.MM_ALLOW_DEMO_AUTH !== 'true') {
+    res.status(403).json({ error: 'dev_controls_disabled' });
+    return;
+  }
+  resetRateLimits();
+  res.json({ ok: true, ...limiterStatus() });
 });
 
 /**
@@ -1921,6 +1958,7 @@ if (shouldSeed(restoredRecords)) {
 }
 
 persistence?.start();
+startLimiterSweep();
 
 /**
  * Expired codes and sessions are swept on an interval. Unref'd so the timer
@@ -1941,6 +1979,7 @@ http.listen(PORT, () => {
   console.log(`  Live streams: ${live.length}   Live auctions: ${auctions.active().length}   Users: ${users.all().length}`);
   console.log(`  Anti-snipe: ${ANTI_SNIPE.triggerWindowMs / 1000}s window → +${ANTI_SNIPE.extensionMs / 1000}s`);
   console.log(`  CORS allowlist: ${allowedOrigins.size} explicit origin(s), vercel previews ${process.env.MM_ALLOW_VERCEL_PREVIEWS === 'false' ? 'blocked' : 'allowed'}`);
+  console.log(`  Rate limiting: on (${limiterStatus().keys} active bucket(s) at boot)`);
   console.log(
     `  Auth: passwordless OTP — demo header ${authService.demoHeaderAllowed() ? 'ALLOWED' : 'refused'}` +
       (authService.demoHeaderAllowed() ? (process.env.NODE_ENV === 'production' ? ' (MM_ALLOW_DEMO_AUTH=true)' : ' (non-production)') : ''),

@@ -56,6 +56,20 @@ const email = (name) => `${name}.${RUN}@example.com`;
 console.log('\n\u001b[1m════════ MoneyMart authentication verification ════════\u001b[0m');
 console.log(`\u001b[2m  api ${API}   run ${RUN}\u001b[0m`);
 
+/**
+ * Clear ingress limits first.
+ *
+ * This suite requests many codes, and the OTP cap (20 per 15 minutes per address)
+ * accumulates across runs — so a second audit in the same window would fail for a
+ * reason unrelated to authentication. The dev-only reset is refused in production,
+ * which is where the production-posture section asserts the limits still apply.
+ */
+try {
+  await fetch(`${API}/api/dev/rate-limit/reset`, { method: 'POST' });
+} catch {
+  /* the endpoint is absent in production, which is expected */
+}
+
 /* ── 1. The flow works ─────────────────────────────────────────────────── */
 section('1. Passwordless sign-in');
 

@@ -42,6 +42,15 @@ async function http(path, options = {}) {
   return { status: response.status, json: await response.json().catch(() => null) };
 }
 
+/**
+ * Clear ingress limits before minting tokens.
+ *
+ * The signing flow is itself rate limited, so a previous suite in the same audit
+ * could otherwise exhaust the allowance and make this fail for an unrelated
+ * reason.
+ */
+await fetch(`${API}/api/dev/rate-limit/reset`, { method: 'POST' }).catch(() => null);
+
 /** A real session token, obtained through the passwordless flow. */
 async function mintToken() {
   const identifier = `socket.${Date.now()}.${Math.random().toString(36).slice(2, 7)}@example.com`;

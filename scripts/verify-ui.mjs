@@ -246,7 +246,17 @@ section('2. Studio section reordering');
  * creator would actually be in.
  */
 async function signInForTests() {
-  const identifier = `uitest.${Date.now()}@example.com`;
+  /**
+   * Clear the ingress limits first.
+   *
+   * This suite signs in several times, and repeated audit runs accumulate
+   * buckets against the same address until the OTP cap refuses the run — the
+   * limiter working correctly, but it makes the suite non-repeatable. Resetting
+   * is the dev-only control production refuses.
+   */
+  await fetch(`${API_BASE}/api/dev/rate-limit/reset`, { method: 'POST' }).catch(() => null);
+
+  const identifier = `uitest.${Date.now()}.${Math.random().toString(36).slice(2, 6)}@example.com`;
   const requested = await fetch(`${API_BASE}/api/auth/request`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
