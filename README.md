@@ -430,6 +430,13 @@ between *"the player compiles"* and *"the player decodes"*.
 | mobile bundling | exports both native platforms; slow | `pnpm verify:mobile` |
 | deployment | needs the hosted gateway and its certificate | `pnpm verify:deploy` |
 
+The gate **reuses any service already answering on its ports** and only starts
+what is missing, tracking which it started so teardown stops only those. Running
+it while the dev servers were up previously killed them, which showed up as 25
+"failures" in the next audit — a test runner has no business having that side
+effect, and starting a second server on a busy port would silently test an
+instance the run never configured.
+
 The first CI run **failed**, which is what running it was for: the gate started
 only the API, so the TV and health suites failed with connection-refused. A gate
 that does not start what it tests reports false negatives, and a gate whose
