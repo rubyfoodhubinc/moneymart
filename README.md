@@ -32,7 +32,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **CI** | ✅ Green on GitHub — 345 checks over 13 suites on every push |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
-| **Verification** | ✅ **485 automated checks** across 18 suites — `pnpm verify:all` |
+| **Verification** | ✅ **491 automated checks** across 18 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -119,7 +119,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  485 passed   0 failed
+  TOTAL  491 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -131,7 +131,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
-pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (41)
+pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (47)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
 pnpm verify:images     # SVG/script refusal, type sniffing, count and size bounds (20)
 pnpm verify:authorization  # order privacy, storefront ownership, id guessing (24)
@@ -448,6 +448,19 @@ actual exchange through it (41 checks). That exercises the production code path,
 not a mock of it: a token signed by the wrong key, an `alg: none` token, a wrong
 issuer, a wrong audience, an expired token and an unpublished `kid` are each
 refused, and the PKCE verifier is confirmed to match the challenge.
+
+### A fault only the deployment could show
+
+Deploying this exposed that **starting a sign-in returned 401**: the production
+identity guard intercepted `/api/auth/oauth/*` — the endpoints whose whole purpose
+is to serve a caller with no identity yet. Every local test passed, because the
+guard has two branches: in development the demo header supplies an actor, so the
+check passes, while production requires a bearer token. Only exercising the
+endpoint on the real deployment showed it.
+
+`/api/auth/oauth/*` is now self-gated, so a provider answers for itself (503 when
+unconfigured) instead of a 401 naming the wrong problem. Asserted in the
+production posture so it cannot return.
 
 One limitation, stated rather than hidden: the success path of the browser handoff
 is verified (the token survives, and is erased from the address bar), but the
