@@ -108,6 +108,11 @@ const SUITES = [
     optional: { env: 'MM_MOBILE_SUITE' },
   },
   {
+    name: 'Production product smoke',
+    script: 'verify-production-app.mjs',
+    detail: 'live app mounts, bundles execute, cross-origin gateway, routes resolve',
+  },
+  {
     name: 'Unified deployment',
     script: 'verify-deploy.mjs',
     detail: 'TLS, single origin, SPA fallback, cache policy, TV isolation, hardening',

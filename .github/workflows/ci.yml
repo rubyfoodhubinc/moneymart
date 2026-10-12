@@ -73,6 +73,21 @@ jobs:
         env:
           CI: 'true'
 
+      # The gate above proves the code is correct. This proves the DEPLOYED
+      # product renders: bundles execute, React mounts, the client reaches its
+      # gateway across origins, and real routes resolve. Those are different
+      # claims, and a green gate has never implied them.
+      #
+      # Non-blocking on purpose: it tests a live host this workflow does not
+      # deploy, so a provider-side blip must not fail a code check. The result is
+      # still visible in the log and as an annotation.
+      - name: Production product smoke
+        continue-on-error: true
+        run: |
+          # Give the platform a moment if a deploy is in flight.
+          sleep 30
+          node scripts/verify-production-app.mjs --url https://moneymart-production.up.railway.app
+
       - name: Upload gate logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
