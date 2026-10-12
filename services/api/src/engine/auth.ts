@@ -49,7 +49,14 @@ export interface AuthSession {
   expiresAt: number;
   /** Rolling metadata for the account screen. */
   lastSeenAt: number;
-  method: 'otp';
+  /**
+   * How the session was established.
+   *
+   * Recorded rather than assumed: a security review of "which sessions exist"
+   * cannot distinguish a passwordless sign-in from a social one otherwise, and
+   * `dev` in a production listing would be the signal that something is wrong.
+   */
+  method: 'otp' | 'oauth' | 'dev';
 }
 
 /* ── Identifier handling ───────────────────────────────────────────────── */
@@ -371,7 +378,7 @@ export const authService = {
    * act as several demo users at once. Production refuses the endpoint, so this
    * cannot be reached there.
    */
-  issueSessionFor(userId: string, method: AuthSession['method'] | 'dev' = 'otp'): string {
+  issueSessionFor(userId: string, method: AuthSession['method'] = 'otp'): string {
     const now = Date.now();
     const session: AuthSession = {
       token: randomBytes(32).toString('base64url'),
@@ -380,9 +387,8 @@ export const authService = {
       createdAt: now,
       expiresAt: now + SESSION_TTL_MS,
       lastSeenAt: now,
-      method: 'otp',
+      method,
     };
-    void method;
     store.db.authSessions.set(session.token, session);
     return session.token;
   },

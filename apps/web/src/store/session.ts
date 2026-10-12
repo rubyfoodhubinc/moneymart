@@ -41,6 +41,23 @@ export interface SessionState {
   requestCode: (identifier: string) => Promise<boolean>;
   verifyCode: (code: string) => Promise<boolean>;
   cancelChallenge: () => void;
+  /**
+   * Adopt a session token produced by a social sign-in redirect.
+   *
+   * The token arrives in the URL fragment, which the browser never sends to a
+   * server, so it must be read and then removed from the address bar.
+   */
+  adoptToken: (token: string) => Promise<void>;
+  /**
+   * Ask the shell to open the sign-in panel.
+   *
+   * Needed because a failed social handoff lands on whatever page the user
+   * started from, where no panel is open — so the reason would be stored and
+   * never seen. Consumed and cleared by the shell.
+   */
+  signInRequested: boolean;
+  requestSignIn: (reason?: string) => void;
+  clearSignInRequest: () => void;
   signOut: () => Promise<void>;
   /** Development-only: switch identity without a code. */
   switchUser: (userId: string) => Promise<void>;
@@ -141,6 +158,20 @@ export const useSession = create<SessionState>((set, get) => ({
     clearToken();
     refreshSocketAuth();
     set({ user: null, profile: null, status: 'anonymous', pending: null, error: null });
+  },
+
+  signInRequested: false,
+
+  requestSignIn: (reason?: string) =>
+    set({ signInRequested: true, ...(reason ? { error: reason } : {}) }),
+
+  clearSignInRequest: () => set({ signInRequested: false }),
+
+  adoptToken: async (token: string) => {
+    setToken(token);
+    refreshSocketAuth();
+    set({ status: 'loading', error: null });
+    await get().refresh();
   },
 
   switchUser: async (userId: string) => {

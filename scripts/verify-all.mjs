@@ -46,6 +46,11 @@ const SUITES = [
     detail: 'OTP flow, canonicalisation, refusals, code hygiene, production posture',
   },
   {
+    name: 'Social sign-in',
+    script: 'verify-oauth.mjs',
+    detail: 'real JWKS, PKCE, single-use state, verified-email linking, browser handoff',
+  },
+  {
     name: 'Image input validation',
     script: 'verify-images.mjs',
     detail: 'SVG and script payloads refused, type sniffed from bytes, count and size bounded',

@@ -8,6 +8,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '@/store/session';
+import { api } from '@/lib/api';
 import { Button, Pill } from '@/components/ui';
 import { CheckIcon, ShieldIcon } from '@/components/icons';
 
@@ -20,6 +21,52 @@ export function SignInPanel({ onDone }: { onDone?: () => void }) {
   const [code, setCode] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const codeInput = useRef<HTMLInputElement | null>(null);
+  /**
+   * Which social providers this deployment can actually complete a sign-in with.
+   *
+   * Fetched rather than hardcoded: offering a Google button on a deployment with
+   * no client ID gives the user a dead end, and the same component ships to every
+   * environment.
+   */
+  const [providers, setProviders] = useState<{ id: string; label: string; configured: boolean }[]>([]);
+  const [socialBusy, setSocialBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .oauthProviders()
+      .then((result) => {
+        if (!cancelled) setProviders((result.providers ?? []).filter((provider) => provider.configured));
+      })
+      .catch(() => {
+        // A failure here must not block the passwordless path.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /**
+   * Start a social sign-in.
+   *
+   * A full-page redirect rather than a popup: the provider needs to post back to
+   * our callback, popups are commonly blocked, and the mobile shell would open a
+   * system browser anyway. The session token comes back in the URL fragment, which
+   * the browser never sends to a server.
+   */
+  const startSocial = async (provider: string) => {
+    setSocialBusy(provider);
+    setNotice(null);
+    try {
+      const { url } = await api.startOAuth(provider, window.location.pathname || '/settings');
+      window.location.assign(url);
+    } catch (cause) {
+      setSocialBusy(null);
+      setNotice(
+        `${provider} sign-in is unavailable right now.${cause instanceof Error && cause.message ? ` (${cause.message})` : ''}`,
+      );
+    }
+  };
 
   // Move focus to the code field as soon as it appears, so the whole flow is
   // keyboard-completable without hunting for the input.
@@ -155,6 +202,31 @@ export function SignInPanel({ onDone }: { onDone?: () => void }) {
           No password stored
         </Pill>
       </div>
+
+      {/*
+        Social providers are offered only when the deployment can complete the
+        exchange, so a button is never a dead end. When none are configured the
+        block is omitted entirely rather than shown disabled — a disabled button
+        with no explanation is worse than no button.
+      */}
+      {providers.length ? (
+        <div className="mt-5 border-t border-white/8 pt-4">
+          <div className="mb-2 text-[11px] uppercase tracking-[0.16em] text-white/35">Or continue with</div>
+          <div className="flex flex-wrap gap-2">
+            {providers.map((provider) => (
+              <Button
+                key={provider.id}
+                variant="ghost"
+                loading={socialBusy === provider.id}
+                disabled={socialBusy !== null}
+                onClick={() => void startSocial(provider.id)}
+              >
+                {provider.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {notice ? <p className="mt-2 text-[12px] text-white/60">{notice}</p> : null}
       {error ? <p className="mt-2 text-[12px]" style={{ color: '#FF8080' }}>{error}</p> : null}

@@ -10,6 +10,7 @@ import cors from 'cors';
 import { createServer } from 'node:http';
 import { createServer as createSecureServer } from 'node:https';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { Server as SocketServer } from 'socket.io';
 import type {
   AuctionWithRelations,
@@ -33,6 +34,7 @@ import { createPersistence, shouldSeed } from './lib/persistence.js';
 import { rateLimit, POLICIES, limiterStatus, resetRateLimits, startLimiterSweep } from './lib/rateLimit.js';
 import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
 import { authService, deliveryConfigured } from './engine/auth.js';
+import { oauthService } from './engine/oauth.js';
 import { resolveStreamPlayback } from './engine/playback.js';
 import { validateImages, MAX_IMAGES } from './lib/images.js';
 import {
@@ -519,7 +521,17 @@ app.get('/api/auth/session', (req, res) => {
     ok: true,
     user: users.get(session.userId),
     profile: publicProfile(session.userId),
-    session: { createdAt: new Date(session.createdAt).toISOString(), expiresAt: new Date(session.expiresAt).toISOString() },
+    session: {
+      createdAt: new Date(session.createdAt).toISOString(),
+      expiresAt: new Date(session.expiresAt).toISOString(),
+      /**
+       * How this session was established. The account screen shows it, and it is
+       * what makes "is this session from a social provider or a code?" answerable
+       * rather than guesswork.
+       */
+      method: session.method,
+      identifier: session.identifier,
+    },
   });
 });
 
@@ -639,6 +651,8 @@ app.get('/api/health', (_req, res) => {
        * reading a log.
        */
       delivery: deliveryConfigured(),
+      /** Which social providers are usable, so a client need not guess. */
+      oauth: oauthService.status(),
     },
     time: store.iso(),
   });
@@ -1174,6 +1188,28 @@ app.post('/api/webhooks/revenuecat', (req, res) => {
   });
 
   res.json({ ok: true, applied: true, subscription });
+});
+
+/**
+ * Dev-only email lookup.
+ *
+ * `/api/users/:handle` returns a public profile and deliberately omits the email,
+ * so a verification suite has no way to assert account linkage without either a
+ * leak or an endpoint like this. Refused in production with the other dev
+ * controls, since the address is exactly what an enumeration attack wants.
+ */
+app.get('/api/dev/user-email', (req, res) => {
+  if (process.env.NODE_ENV === 'production' && process.env.MM_ALLOW_DEMO_AUTH !== 'true') {
+    res.status(403).json({ error: 'dev_controls_disabled' });
+    return;
+  }
+  const userId = String((req.query as { userId?: string }).userId ?? '');
+  const user = userId ? users.get(userId) : undefined;
+  if (!user) {
+    res.status(404).json({ error: 'user_not_found' });
+    return;
+  }
+  res.json({ userId: user.id, email: user.email, handle: user.handle });
 });
 
 /**
@@ -1842,6 +1878,150 @@ app.post('/api/dev/reset', (_req, res) => {
     liveAuctions: auctions.active().length,
   });
 });
+
+/* ── REST: social sign-in (§9.1 Auth Service) ───────────────────────────── */
+
+/**
+ * Which social providers are usable, so a client renders only the buttons that
+ * can work instead of offering a sign-in that dead-ends.
+ */
+app.get('/api/auth/oauth/providers', (_req, res) => {
+  res.json({ providers: oauthService.status() });
+});
+
+/**
+ * Begin a flow. Answers with the provider URL rather than redirecting, so the
+ * web app can drive a popup and the mobile app can open a system browser — the
+ * two platforms need different presentation for the same exchange.
+ */
+app.post('/api/auth/oauth/:provider/start', rateLimit(POLICIES.authVerify), (req, res) => {
+  const { provider } = req.params;
+  const redirect = String((req.body as { redirect?: string } | undefined)?.redirect ?? '/');
+  const result = oauthService.begin(provider, redirect);
+
+  if ('error' in result) {
+    const status = result.error === 'unknown_provider' ? 404 : 503;
+    res.status(status).json({
+      error: result.error,
+      detail:
+        result.error === 'provider_not_configured'
+          ? `${provider} sign-in is not configured on this deployment.`
+          : `Unknown provider: ${provider}`,
+    });
+    return;
+  }
+
+  res.json({ url: result.url, state: result.state });
+});
+
+/**
+ * Complete a flow.
+ *
+ * The provider redirects the BROWSER here, so this endpoint cannot rely on the
+ * app's usual headers. On success it hands the session token back in the URL
+ * **fragment**: a fragment is not sent to any server, so it stays out of access
+ * logs, proxy logs and Referer headers, which a query parameter would not.
+ *
+ * GET is supported for Google's query-string redirect and for a user who
+ * refreshes; Apple posts a form.
+ */
+async function oauthCallback(req: Request, res: Response): Promise<void> {
+  const { provider } = req.params;
+  const source = { ...(req.query as Record<string, unknown>), ...(req.body as Record<string, unknown>) };
+  const code = typeof source.code === 'string' ? source.code : '';
+  const state = typeof source.state === 'string' ? source.state : '';
+
+  const failTo = (appPath: string, reason: string) =>
+    res.redirect(`${appPath}${appPath.includes('?') ? '&' : '?'}auth_error=${encodeURIComponent(reason)}`);
+
+  // The provider may report a refusal instead of a code.
+  const providerError = typeof source.error === 'string' ? source.error : '';
+  if (providerError) {
+    failTo('/', `provider_${providerError}`);
+    return;
+  }
+  if (!code || !state) {
+    failTo('/', 'missing_code_or_state');
+    return;
+  }
+
+  // Single-use, so a replayed state cannot mint a second session.
+  const flow = oauthService.consume(state);
+  if (!flow || flow.provider !== provider) {
+    failTo('/', 'invalid_or_expired_state');
+    return;
+  }
+
+  try {
+    const profile = await oauthService.complete(flow, code);
+    const identityKey = `${provider}:${profile.subject}`;
+
+    /**
+     * Resolve the account.
+     *
+     * Linking by email is only allowed when the PROVIDER asserts the address is
+     * verified. Accepting an unverified address would let anyone who can register
+     * `victim@example.com` at a loose provider take over the MoneyMart account
+     * that owns it.
+     */
+    let userId = store.db.oauthIdentities.get(identityKey);
+    if (!userId) {
+      const existing = profile.email && profile.emailVerified ? users.findByEmail(profile.email) : undefined;
+      if (existing) {
+        userId = existing.id;
+      } else {
+        // A stable id derived from the identity, so a concurrent callback for the
+        // same person converges on one account rather than racing to create two.
+        userId = `usr_${createHash('sha256').update(identityKey).digest('hex').slice(0, 12)}`;
+        users.ensure(userId, { email: profile.email ?? `${profile.subject}@${provider}.oauth` });
+      }
+      store.db.oauthIdentities.set(identityKey, userId);
+    }
+
+    const user = users.ensure(userId, { email: profile.email });
+    // Fill in what the provider gave us, without overwriting anything the user
+    // has since set themselves.
+    let changed = false;
+    if (profile.displayName && (!user.displayName || /^[A-Z0-9_]{4,10}$/.test(user.displayName))) {
+      user.displayName = profile.displayName;
+      changed = true;
+    }
+    if (profile.avatarUrl && !user.avatarUrl) {
+      user.avatarUrl = profile.avatarUrl;
+      changed = true;
+    }
+    if (profile.email && profile.emailVerified && user.email.endsWith('@moneymart.demo')) {
+      user.email = profile.email;
+      changed = true;
+    }
+    if (changed) users.upsert(user);
+
+    const token = authService.issueSessionFor(user.id, 'oauth');
+
+    /**
+     * Fragment, not query: a fragment is never sent to a server, so the token
+     * stays out of access logs, proxy logs and Referer headers.
+     *
+     * `redirect` is validated as an in-app path so the callback cannot be turned
+     * into an open redirect. MM_OAUTH_APP_ORIGIN is separate and operator-set: the
+     * app is a different origin from the gateway when the web build is served
+     * anywhere other than the API (Vercel, a preview, or the web dev server), and
+     * without it the browser would receive the handoff on the API origin, which
+     * has no app to consume it.
+     */
+    const target = flow.redirect.startsWith('/') && !flow.redirect.startsWith('//') ? flow.redirect : '/';
+    const appOrigin = (process.env.MM_OAUTH_APP_ORIGIN ?? '').replace(/\/$/, '');
+    res.redirect(`${appOrigin}${target}#token=${encodeURIComponent(token)}&provider=${provider}`);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'exchange_failed';
+    console.warn(`  [oauth] ${provider} exchange failed: ${detail}`);
+    failTo('/', detail.startsWith('google_') || detail.startsWith('apple_') ? detail : 'exchange_failed');
+  }
+}
+
+app.get('/api/auth/oauth/:provider/callback', oauthCallback);
+// Apple posts the authorization response as a form.
+app.post('/api/auth/oauth/:provider/callback', express.urlencoded({ extended: false }), oauthCallback);
 
 /* ── Socket.IO realtime layer ──────────────────────────────────────────── */
 

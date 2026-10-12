@@ -73,6 +73,13 @@ export const db = {
    * sessions, which is the safe direction to fail.
    */
   authSessions: new Map<string, AuthSession>(),
+  /**
+   * Linked social identities, keyed `${provider}:${subject}` -> userId.
+   *
+   * Durable, unlike sessions: the provider's subject never changes, so losing
+   * the link would silently create a duplicate account on the next sign-in.
+   */
+  oauthIdentities: new Map<string, string>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
 };
@@ -83,6 +90,9 @@ export const users = {
   get: (id: string) => db.users.get(id),
   findByHandle: (handle: string) =>
     [...db.users.values()].find((u) => u.handle.toLowerCase() === handle.toLowerCase()),
+  /** Case-insensitive, because providers disagree about address casing. */
+  findByEmail: (email: string) =>
+    [...db.users.values()].find((u) => u.email.toLowerCase() === email.trim().toLowerCase()),
   upsert: (user: User) => {
     db.users.set(user.id, user);
     return user;
@@ -363,6 +373,14 @@ const COLLECTIONS = [
   'storefronts',
   'escrow',
   'subscriptions',
+  /**
+   * Linked social identities, keyed `${provider}:${subject}`.
+   *
+   * Durable on purpose: a provider's subject is stable for the life of the
+   * account, so the link must survive a restart or a returning user would be
+   * provisioned a second account for the same person.
+   */
+  'oauthIdentities',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

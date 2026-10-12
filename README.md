@@ -30,8 +30,9 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Authorization** | ✅ Object-level checks — orders private to participants, storefront writes owner-scoped |
 | **Rate limiting** | ✅ Ingress limits on the message-sending and write paths |
 | **CI** | ✅ Green on GitHub — 345 checks over 13 suites on every push |
+| **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
-| **Verification** | ✅ **444 automated checks** across 17 suites — `pnpm verify:all` |
+| **Verification** | ✅ **485 automated checks** across 18 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -118,7 +119,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  444 passed   0 failed
+  TOTAL  485 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -130,6 +131,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
+pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (41)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
 pnpm verify:images     # SVG/script refusal, type sniffing, count and size bounds (20)
 pnpm verify:authorization  # order privacy, storefront ownership, id guessing (24)
@@ -408,6 +410,50 @@ auth: {"demoHeader": false}
 Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
+
+## Social sign-in (Google and Apple)
+
+The blueprint specifies Firebase Auth with Google, Apple and Facebook. This
+implements the OpenID Connect authorization-code flow directly instead of adding a
+vendor, because the platform already owns its session layer and Firebase would be
+a second source of truth for identity.
+
+Google and Apple differ in exactly one way that is easy to get wrong: a Google
+client secret is a **plain string**, whereas **Apple's is an ES256 JWT** signed
+with a private key and minted fresh on every exchange. Treating Apple's secret as
+a string is the usual reason "Sign in with Apple" fails only in production.
+
+| Property | How it is enforced |
+|---|---|
+| **Signature** | the ID token is verified against the provider's **JWKS** — an unverified decode would accept any crafted token |
+| **Algorithm** | only `RS256`/`ES256`; `alg: none` is refused |
+| **Issuer / audience / expiry** | all checked, each asserted separately |
+| **Unpublished `kid`** | refused, with **no fallback** to another key |
+| **PKCE** | verifier held server-side, challenge sent as `S256`, verifier checked to match on exchange |
+| **State** | single-use, 10-minute TTL, so a replay cannot mint a second session |
+| **Linking** | an email links to an existing account **only when the provider asserts it is verified** |
+| **Return path** | validated as an in-app path, so the callback is not an open redirect |
+| **Handoff** | the session token returns in the URL **fragment**, which is never sent to a server, so it stays out of access logs and `Referer` |
+
+A provider with no credentials is reported as unconfigured and its button is **not
+offered** — a disabled button with no explanation is worse than no button. Set
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` or the four `APPLE_*` values to activate
+one; see `.env.example`.
+
+### How this was verified without real provider credentials
+
+`pnpm verify:oauth` stands up a **real OpenID Connect provider on localhost** —
+serving a JWKS and a token endpoint, signing genuine ID tokens — and drives the
+actual exchange through it (41 checks). That exercises the production code path,
+not a mock of it: a token signed by the wrong key, an `alg: none` token, a wrong
+issuer, a wrong audience, an expired token and an unpublished `kid` are each
+refused, and the PKCE verifier is confirmed to match the challenge.
+
+One limitation, stated rather than hidden: the success path of the browser handoff
+is verified (the token survives, and is erased from the address bar), but the
+**presentation** of a failed sign-in could not be confirmed reliably in headless
+Chrome, so it is deliberately **not asserted**. The security property — the token
+never lingering in the URL — is verified for both paths.
 
 ## The deployed product, verified
 

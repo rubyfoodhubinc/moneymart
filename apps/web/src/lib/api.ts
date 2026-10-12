@@ -222,7 +222,14 @@ export const api = {
       kind: 'email' | 'phone';
       destination: string;
       expiresInSeconds: number;
-      delivery: { delivered: boolean; transport: string; detail?: string };
+      delivery: {
+        delivered: boolean;
+        transport: string;
+        detail?: string;
+        /** True only when a message was actually sent. */
+        reachable?: boolean;
+        configured?: { sms: boolean; email: boolean };
+      };
       /** Present only when development code exposure is enabled. */
       devCode?: string;
     }>('/api/auth/request', { method: 'POST', body: JSON.stringify({ identifier }) }),
@@ -236,6 +243,20 @@ export const api = {
       profile: PublicProfile;
       needsProfile: boolean;
     }>('/api/auth/verify', { method: 'POST', body: JSON.stringify({ identifier, code }) }),
+
+  /**
+   * Social sign-in.
+   *
+   * The exchange happens server-side; the browser is only sent to the provider
+   * and back, so no client secret ever reaches the page.
+   */
+  oauthProviders: () =>
+    request<{ providers: { id: string; label: string; configured: boolean }[] }>('/api/auth/oauth/providers'),
+  startOAuth: (provider: string, redirect: string) =>
+    request<{ url: string; state: string }>(`/api/auth/oauth/${provider}/start`, {
+      method: 'POST',
+      body: JSON.stringify({ redirect }),
+    }),
 
   authSession: () =>
     request<{ ok: boolean; user: User; profile: PublicProfile; session: { createdAt: string; expiresAt: string } }>(

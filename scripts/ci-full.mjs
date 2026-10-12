@@ -53,8 +53,14 @@ const API_SUITES = [
   'verify-subscriptions.mjs',
 ];
 
-/** Suites that also need the web and TV dev servers. */
-const FULL_SUITES = ['verify-tv.mjs', 'health.mjs'];
+/**
+ * Suites that also need a web surface.
+ *
+ * The OAuth suite starts its OWN gateway and web server because it must control
+ * CORS, the app origin and the provider endpoints together; it is listed here
+ * only so it runs as part of the gate.
+ */
+const FULL_SUITES = ['verify-oauth.mjs', 'verify-tv.mjs', 'health.mjs'];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const chromePath = [

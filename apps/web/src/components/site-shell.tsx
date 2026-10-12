@@ -37,6 +37,19 @@ export function SiteHeader() {
   const pathname = useLocation().pathname;
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  /**
+   * A failed social handoff asks for the panel to open, since the user is returned
+   * to a normal page with nothing to explain what went wrong.
+   */
+  const signInRequested = useSession((state) => state.signInRequested);
+  const clearSignInRequest = useSession((state) => state.clearSignInRequest);
+  useEffect(() => {
+    if (signInRequested) {
+      setMenuOpen(true);
+      clearSignInRequest();
+    }
+  }, [signInRequested, clearSignInRequest]);
   const [bellOpen, setBellOpen] = useState(false);
   const { user, profile, users, switchUser, status, signOut } = useSession();
   const notifications = useNotifications();
