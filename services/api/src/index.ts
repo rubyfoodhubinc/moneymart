@@ -28,6 +28,7 @@ import { escrow, EscrowError } from './engine/escrow.js';
 import { providerRegistry } from './engine/payments.js';
 import { qrToSvgDataUri } from './lib/qr.js';
 import { mountStaticHost } from './lib/staticHost.js';
+import { createPersistence, shouldSeed } from './lib/persistence.js';
 import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
 import { resolveStreamPlayback } from './engine/playback.js';
 import {
@@ -305,6 +306,12 @@ app.get('/api/health', (_req, res) => {
     uptimeSeconds: Math.round(process.uptime()),
     liveStreams: streams.live().length,
     liveAuctions: auctions.active().length,
+    /**
+     * Which persistence adapter is active, or null when the store is volatile.
+     * Exposed so a deployment's durability is observable from outside instead of
+     * being an assumption about its configuration.
+     */
+    persistence: persistence ? persistence.status().adapter : null,
     time: store.iso(),
   });
 });
@@ -1546,9 +1553,26 @@ app.use((error: Error, req: Request, res: Response, _next: NextFunction) => {
 
 /* ── Boot ──────────────────────────────────────────────────────────────── */
 
-if (process.env.MM_SEED !== 'false') {
+/**
+ * Restore before seeding.
+ *
+ * The order matters: seeding writes the demo auction house into the store, so
+ * doing it first would overwrite a restored snapshot with demo data and lose
+ * every real listing, bid and escrow record on each restart. The store is only
+ * seeded when there is genuinely nothing to restore.
+ */
+const persistence = createPersistence();
+const restoredRecords = persistence ? await persistence.restore() : 0;
+
+if (shouldSeed(restoredRecords)) {
   seed();
+} else if (restoredRecords > 0 && process.env.MM_SEED !== 'false') {
+  console.log(`  Restored ${restoredRecords} records; skipping the demo seed so live data is not overwritten.`);
+} else if (process.env.MM_SEED === 'false') {
+  console.log('  MM_SEED=false — starting without demo data.');
 }
+
+persistence?.start();
 
 http.listen(PORT, () => {
   const live = streams.live();
@@ -1557,6 +1581,16 @@ http.listen(PORT, () => {
   console.log(`  Live streams: ${live.length}   Live auctions: ${auctions.active().length}   Users: ${users.all().length}`);
   console.log(`  Anti-snipe: ${ANTI_SNIPE.triggerWindowMs / 1000}s window → +${ANTI_SNIPE.extensionMs / 1000}s`);
   console.log(`  CORS allowlist: ${allowedOrigins.size} explicit origin(s), vercel previews ${process.env.MM_ALLOW_VERCEL_PREVIEWS === 'false' ? 'blocked' : 'allowed'}`);
+  if (persistence) {
+    const status = persistence.status();
+    console.log(
+      `  Persistence: ${status.adapter} every ${status.intervalMs / 1000}s` +
+        (status.lastSavedAt ? ` (last snapshot ${status.lastSavedAt})` : ' (no snapshot yet)'),
+    );
+    if (status.lastError) console.log(`    last error: ${status.lastError}`);
+  } else {
+    console.log('  Persistence: disabled (MM_PERSISTENCE=off) — the store is volatile');
+  }
   if (staticResult.mounted.length) {
     console.log('  Serving clients:');
     staticResult.mounted.forEach((entry) => console.log(`    ${entry}`));
@@ -1565,3 +1599,25 @@ http.listen(PORT, () => {
 });
 
 export { app, http, io };
+
+/* ── Shutdown ──────────────────────────────────────────────────────────────
+   Flush the final snapshot so a normal restart or redeploy does not depend on
+   the interval happening to have fired. Railway sends SIGTERM before replacing a
+   container, which is the common case this covers.
+   ──────────────────────────────────────────────────────────────────────────*/
+let shuttingDown = false;
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n  ${signal} received — flushing snapshot and closing.`);
+    void persistence
+      ?.close()
+      .catch((error) => console.error('[shutdown] flush failed:', error))
+      .finally(() => {
+        http.close(() => process.exit(0));
+        // Do not hang forever if a socket refuses to close.
+        setTimeout(() => process.exit(0), 5000).unref();
+      });
+  });
+}

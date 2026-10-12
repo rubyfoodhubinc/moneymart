@@ -28,6 +28,10 @@ apps/mobile/.export-probe/
 docs/next-web-preserved/
 *.log
 
+# Local persistence snapshots are runtime state, never image content
+.data/
+*.snapshot.json
+
 # Local environment files. Real configuration arrives through the platform's
 # environment variables (Railway / Vercel), documented in .env.example.
 .env

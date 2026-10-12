@@ -33,6 +33,9 @@ web-build/
 .npm-cache/
 .npm/
 
+# Local persistence snapshots — runtime state, not source
+.data/
+
 # logs & runtime
 *.log
 npm-debug.log*

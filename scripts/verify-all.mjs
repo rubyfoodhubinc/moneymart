@@ -41,6 +41,11 @@ const SUITES = [
     detail: 'rails, authorisation, hold, release-on-confirmation, decline, dispute, refund',
   },
   {
+    name: 'Persistence',
+    script: 'verify-persistence.mjs',
+    detail: 'snapshot round-trip across a hard kill, corrupt-file recovery, opt-out',
+  },
+  {
     name: 'Browser UI (real Chrome)',
     script: 'verify-ui.mjs',
     detail: 'pages render, drag reorder handles, keyboard reordering preserves items',

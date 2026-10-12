@@ -23,6 +23,9 @@ import type {
   User,
 } from '@moneymart/types';
 
+/** Bump when the snapshot shape changes incompatibly. */
+const SNAPSHOT_VERSION = 1;
+
 let seq = 1000;
 export function nextId(prefix: string): string {
   seq += 1;
@@ -322,8 +325,108 @@ export const storefronts = {
   remove: (handle: string) => db.storefronts.delete(handle),
 };
 
+/**
+ * Every collection in the store, so persistence can walk them generically.
+ * Adding a collection here is what makes it durable — a list that silently
+ * omitted one would drop that data on restore with no error.
+ */
+const COLLECTIONS = [
+  'users',
+  'items',
+  'auctions',
+  'bids',
+  'autoBids',
+  'streams',
+  'chat',
+  'orders',
+  'payouts',
+  'notifications',
+  'priceHistory',
+  'storefronts',
+  'escrow',
+  'subscriptions',
+] as const;
+
+export type CollectionName = (typeof COLLECTIONS)[number];
+
+/** A plain-JSON image of the whole store. Maps become arrays of entries. */
+export interface StoreSnapshot {
+  version: number;
+  capturedAt: string;
+  collections: Record<string, [string, unknown][]>;
+  /** Sequence counter, so generated ids do not collide after a restore. */
+  seq: number;
+}
+
+/**
+ * Serialise the store.
+ *
+ * Maps are flattened to entry arrays rather than objects because several
+ * collections legitimately use non-identifier string keys, and `Object.fromEntries`
+ * would silently coerce anything that is not a plain string.
+ */
+export function captureSnapshot(): StoreSnapshot {
+  const collections: Record<string, [string, unknown][]> = {};
+  for (const name of COLLECTIONS) {
+    collections[name] = [...(db[name] as Map<string, unknown>).entries()];
+  }
+  return {
+    version: SNAPSHOT_VERSION,
+    capturedAt: iso(),
+    collections,
+    seq,
+  };
+}
+
+/**
+ * Restore a snapshot.
+ *
+ * Returns the number of records loaded. Values are described in place, so a
+ * snapshot written by an older build that lacks a field still restores: the
+ * missing field is simply absent, and callers already treat optional fields as
+ * optional. Restoring never merges — the snapshot is the whole truth.
+ */
+export function hydrateSnapshot(snapshot: StoreSnapshot): number {
+  if (!snapshot || typeof snapshot !== 'object' || !snapshot.collections) return 0;
+
+  let loaded = 0;
+  for (const name of COLLECTIONS) {
+    const entries = snapshot.collections[name];
+    if (!Array.isArray(entries)) continue;
+    const target = db[name] as Map<string, unknown>;
+    target.clear();
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length !== 2) continue;
+      const [key, value] = entry as [string, unknown];
+      if (typeof key !== 'string') continue;
+      target.set(key, value);
+      loaded += 1;
+    }
+  }
+
+  // Advance the id sequence past anything already stored, or a restored record
+  // could be overwritten by a freshly generated id.
+  if (typeof snapshot.seq === 'number' && Number.isFinite(snapshot.seq)) {
+    seq = Math.max(seq, snapshot.seq);
+  }
+
+  // The session identity is deliberately not persisted: it is a dev stand-in,
+  // and restoring it would let one deployment inherit another's acting user.
+  db.session.userId = '';
+
+  return loaded;
+}
+
+export function isEmptyStore(): boolean {
+  return COLLECTIONS.every((name) => (db[name] as Map<string, unknown>).size === 0);
+}
+
 export const store = {
   db,
+  captureSnapshot,
+  hydrateSnapshot,
+  isEmptyStore,
+  COLLECTIONS,
   nextId,
   iso,
   users,
