@@ -125,6 +125,29 @@ function qs(params: Record<string, string | number | undefined>): string {
 export const api = {
   session: () => request<{ user: User | null; profile: PublicProfile }>('/api/session'),
 
+  /**
+   * Update the caller's own account.
+   *
+   * The mobile setup screen's save button was `onPress={() => undefined}`: a name
+   * and notification choices were collected and thrown away. The id comes from the
+   * session, so this can only ever address the signed-in account.
+   */
+  updateMe: (patch: {
+    displayName?: string;
+    bio?: string;
+    countryCode?: string;
+    currencyCode?: string;
+    avatarUrl?: string;
+    preferences?: Record<string, unknown>;
+  }) =>
+    request<{ ok: boolean; changed: string[]; user: User; profile: PublicProfile }>('/api/me', {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  /** The caller's own account, including preferences the public profile omits. */
+  me: () => request<{ user: User; profile: PublicProfile; preferences: Record<string, unknown> }>('/api/me'),
+
   /** Passwordless sign-in (§9.1). */
   requestCode: (identifier: string) =>
     request<{

@@ -28,9 +28,48 @@ export interface User {
   followingCount: number;
   responseTimeMinutes: number;
   isPro: boolean;
+  /**
+   * Account preferences the user controls.
+   *
+   * These settings existed only as component state on the web and as
+   * `onPress={() => undefined}` on mobile, so every one of them was discarded —
+   * a currency change, a privacy toggle and a notification choice all appeared to
+   * work and none of them survived leaving the screen. They live on the account
+   * because that is the only place a preference can survive a restart.
+   */
+  preferences?: UserPreferences;
   createdAt: ISODate;
   lastLoginAt?: ISODate;
 }
+
+export interface UserPreferences {
+  /** Whether the shop and listings are publicly visible. */
+  publicProfile: boolean;
+  /** Whether this user's bid history is shown to others. */
+  bidHistoryPublic: boolean;
+  /** Interface language tag, e.g. `en`. */
+  language: string;
+  /**
+   * Per-category notification switches, keyed by the category the client uses
+   * (`outbid`, `streamStart`, `endingSoon`, `orderUpdates`, `priceDrops`,
+   * `marketing`). Absent keys mean "on".
+   */
+  notifications?: Record<string, boolean>;
+  /**
+   * Categories the user asked to see more of.
+   *
+   * Collected by the mobile setup screen. It was being sent and silently dropped,
+   * which is the same defect as a toggle that does not save.
+   */
+  interests?: string[];
+}
+
+/** Resolved preferences, with the documented defaults filled in. */
+export const DEFAULT_USER_PREFERENCES: UserPreferences = {
+  publicProfile: true,
+  bidHistoryPublic: true,
+  language: 'en',
+};
 
 export type ItemCondition = 'new' | 'like_new' | 'good' | 'fair' | 'parts';
 

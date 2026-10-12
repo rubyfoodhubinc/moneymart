@@ -16,6 +16,7 @@ import type {
   Paginated,
   Payout,
   PublicProfile,
+  UserPreferences,
   StreamWithRelations,
   Subscription,
   User,
@@ -257,6 +258,39 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ redirect }),
     }),
+
+  /**
+   * Update the caller's own account.
+   *
+   * The id comes from the session, never the body, so a client cannot address
+   * another account through this call.
+   */
+  updateMe: (patch: {
+    displayName?: string;
+    bio?: string;
+    countryCode?: string;
+    currencyCode?: string;
+    avatarUrl?: string;
+    preferences?: Partial<UserPreferences>;
+  }) => request<{ ok: boolean; changed: string[]; user: User; profile: PublicProfile; preferences: UserPreferences }>(
+    '/api/me',
+    { method: 'PATCH', body: JSON.stringify(patch) },
+  ),
+
+  /**
+   * The caller's own data archive, as a Blob.
+   *
+   * Deliberately not built on `request`: that helper parses JSON, and an export is
+   * a download whose filename comes from `Content-Disposition`.
+   */
+  exportAccount: async (): Promise<Blob> => {
+    const response = await fetch(`${apiBase()}/api/me/export`, { headers: authHeaders() });
+    if (!response.ok) throw new Error(`export_failed_${response.status}`);
+    return response.blob();
+  },
+
+  /** The caller's own account, including preferences the public profile omits. */
+  me: () => request<{ user: User; profile: PublicProfile; preferences: UserPreferences }>('/api/me'),
 
   authSession: () =>
     request<{ ok: boolean; user: User; profile: PublicProfile; session: { createdAt: string; expiresAt: string } }>(

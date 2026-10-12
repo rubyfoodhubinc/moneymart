@@ -10,6 +10,7 @@ import { categories } from '@moneymart/tokens';
 import { Avatar, Body, Button, Card, Display, Pill } from '@/components/ui';
 import { CameraIcon, CheckIcon, SparkIcon } from '@/components/icons';
 import { colors, radii } from '@/theme';
+import { api } from '@/lib/api';
 import { useSession } from '@/store/session';
 
 const NOTIFICATION_TYPES = [
@@ -33,10 +34,45 @@ export default function ProfileSetupScreen({ navigation, route }: { navigation: 
     priceDrops: false,
   });
 
-  const finish = () => {
-    const callback = route?.params?.onFinish;
-    if (typeof callback === 'function') callback();
-    else navigation.navigate('Tabs');
+  /**
+   * Save, then continue.
+   *
+   * This previously only navigated: the display name and every notification switch
+   * were discarded, because no endpoint existed to store them and the button was
+   * literally a no-op. A failure is surfaced rather than swallowed, so the user
+   * knows their name did not save instead of discovering it later.
+   */
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const finish = async () => {
+    const proceed = () => {
+      const callback = route?.params?.onFinish;
+      if (typeof callback === 'function') callback();
+      else navigation.navigate('Tabs');
+    };
+
+    if (!user) {
+      proceed();
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      const trimmed = displayName.trim();
+      await api.updateMe({
+        // Only send a name that meets the server's rule, so a blank field does not
+        // produce a rejection the user cannot act on.
+        ...(trimmed.length >= 2 ? { displayName: trimmed } : {}),
+        preferences: { notifications: prefs, interests },
+      });
+      proceed();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save your profile.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (

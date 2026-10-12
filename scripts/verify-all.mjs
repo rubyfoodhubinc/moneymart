@@ -51,6 +51,11 @@ const SUITES = [
     detail: 'list → bid → settle → pay → escrow → ship → release → books balance',
   },
   {
+    name: 'Account preferences & export',
+    script: 'verify-preferences.mjs',
+    detail: 'changes persist, invalid input refused, export is real and scoped',
+  },
+  {
     name: 'Concurrency across auctions',
     script: 'verify-concurrency.mjs',
     detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',

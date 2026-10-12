@@ -22,6 +22,7 @@ import type {
   Storefront,
   User,
 } from '@moneymart/types';
+import { DEFAULT_USER_PREFERENCES, type UserPreferences } from '@moneymart/types';
 import { categories } from '@moneymart/tokens';
 import { ANTI_SNIPE, ITEM_TIMER, categoryLabel } from './lib/labels.js';
 import { engine, type EngineEvent } from './engine/auctionEngine.js';
@@ -36,7 +37,7 @@ import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
 import { authService, deliveryConfigured } from './engine/auth.js';
 import { oauthService } from './engine/oauth.js';
 import { resolveStreamPlayback } from './engine/playback.js';
-import { validateImages, MAX_IMAGES } from './lib/images.js';
+import { validateImage, validateImages, MAX_IMAGES } from './lib/images.js';
 import {
   auctions,
   chat,
@@ -1954,6 +1955,292 @@ app.post('/api/dev/reset', (_req, res) => {
     streams: streams.all().length,
     liveAuctions: auctions.active().length,
   });
+});
+
+/* ── REST: account preferences (§9.1 Auth Service) ──────────────────────── */
+
+/**
+ * Resolve stored preferences against the documented defaults.
+ *
+ * Every read goes through this so a client never has to know which fields were
+ * introduced when, and an account created before this existed behaves exactly like
+ * a new one.
+ */
+function preferencesFor(user: User): UserPreferences {
+  return {
+    ...DEFAULT_USER_PREFERENCES,
+    ...(user.preferences ?? {}),
+    notifications: { ...(user.preferences?.notifications ?? {}) },
+  };
+}
+
+const LANGUAGE_TAG = /^[a-z]{2}(-[A-Za-z]{2,8})?$/;
+
+/** Notification switches a client may set, matching the settings screen. */
+const NOTIFICATION_KEYS = ['outbid', 'streamStart', 'endingSoon', 'orderUpdates', 'priceDrops', 'marketing'] as const;
+
+/**
+ * Update the caller's own account.
+ *
+ * There was previously NO way to persist a profile change: the web settings screen
+ * kept currency, language, privacy and notification choices in component state and
+ * discarded them on navigation, and the mobile setup screen's save button was
+ * literally `onPress={() => undefined}`. Users could change these and nothing
+ * happened, which is worse than not offering them.
+ *
+ * Only the caller's own account can be written — the id comes from the session, not
+ * the body — and every value is validated, because these fields are echoed back to
+ * other users (display name, bio, privacy) and rendered by every client.
+ */
+app.patch('/api/me', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const changed: string[] = [];
+
+  if (body.displayName !== undefined) {
+    const value = String(body.displayName).trim();
+    if (value.length < 2 || value.length > 40) {
+      res.status(400).json({ error: 'invalid_display_name', detail: 'A display name is 2–40 characters.' });
+      return;
+    }
+    user.displayName = value;
+    changed.push('displayName');
+  }
+
+  if (body.bio !== undefined) {
+    const value = String(body.bio).trim().slice(0, 280);
+    user.bio = value;
+    changed.push('bio');
+  }
+
+  if (body.countryCode !== undefined) {
+    const value = String(body.countryCode).trim().toUpperCase();
+    // ISO 3166-1 alpha-2; a free-text country would break tax and shipping quoting.
+    if (!/^[A-Z]{2}$/.test(value)) {
+      res.status(400).json({ error: 'invalid_country', detail: 'A country must be a two-letter ISO code.' });
+      return;
+    }
+    user.countryCode = value;
+    changed.push('countryCode');
+  }
+
+  if (body.currencyCode !== undefined) {
+    const value = String(body.currencyCode).trim().toUpperCase();
+    const supported = ['USD', 'GBP', 'EUR', 'NGN', 'CAD', 'KES', 'ZAR'];
+    if (!supported.includes(value)) {
+      res.status(400).json({ error: 'unsupported_currency', detail: `Currency must be one of ${supported.join(', ')}.` });
+      return;
+    }
+    user.currencyCode = value as User['currencyCode'];
+    changed.push('currencyCode');
+  }
+
+  if (body.avatarUrl !== undefined) {
+    // Reuse the image rules, so an avatar cannot smuggle what a listing cannot.
+    const checked = validateImage(body.avatarUrl);
+    if (!checked.ok) {
+      res.status(400).json({ error: 'invalid_avatar', detail: checked.reason });
+      return;
+    }
+    user.avatarUrl = checked.value;
+    changed.push('avatarUrl');
+  }
+
+  if (body.preferences !== undefined) {
+    const incoming = body.preferences as Record<string, unknown>;
+    if (typeof incoming !== 'object' || incoming === null || Array.isArray(incoming)) {
+      res.status(400).json({ error: 'invalid_preferences', detail: 'preferences must be an object.' });
+      return;
+    }
+
+    const current = preferencesFor(user);
+
+    if (incoming.publicProfile !== undefined) {
+      if (typeof incoming.publicProfile !== 'boolean') {
+        res.status(400).json({ error: 'invalid_preference', detail: 'publicProfile must be a boolean.' });
+        return;
+      }
+      current.publicProfile = incoming.publicProfile;
+    }
+
+    if (incoming.bidHistoryPublic !== undefined) {
+      if (typeof incoming.bidHistoryPublic !== 'boolean') {
+        res.status(400).json({ error: 'invalid_preference', detail: 'bidHistoryPublic must be a boolean.' });
+        return;
+      }
+      current.bidHistoryPublic = incoming.bidHistoryPublic;
+    }
+
+    if (incoming.language !== undefined) {
+      const value = String(incoming.language).trim();
+      if (!LANGUAGE_TAG.test(value)) {
+        res.status(400).json({ error: 'invalid_language', detail: 'A language must be a tag such as `en` or `en-GB`.' });
+        return;
+      }
+      current.language = value;
+    }
+
+    if (incoming.interests !== undefined) {
+      /**
+       * Interests are validated against the platform's OWN category list rather
+       * than accepted as free text: they drive which lots a user is shown, so an
+       * arbitrary value would be a stored string nothing could ever match.
+       */
+      if (!Array.isArray(incoming.interests)) {
+        res.status(400).json({ error: 'invalid_preference', detail: 'interests must be an array.' });
+        return;
+      }
+      const known = new Set<string>(categories.map((entry) => String(entry.id)));
+      const chosen = incoming.interests.map((value) => String(value));
+      const unknown = chosen.filter((value) => !known.has(value));
+      if (unknown.length) {
+        res.status(400).json({ error: 'unknown_interest', detail: `Unknown categor${unknown.length > 1 ? 'ies' : 'y'}: ${unknown.slice(0, 3).join(', ')}` });
+        return;
+      }
+      // Bounded so the stored document cannot grow without limit.
+      current.interests = [...new Set(chosen)].slice(0, 12);
+    }
+
+    if (incoming.notifications !== undefined) {
+      const list = incoming.notifications as Record<string, unknown>;
+      if (typeof list !== 'object' || list === null || Array.isArray(list)) {
+        res.status(400).json({ error: 'invalid_preference', detail: 'notifications must be an object.' });
+        return;
+      }
+      const merged = { ...(current.notifications ?? {}) };
+      for (const [key, value] of Object.entries(list)) {
+        /**
+         * A key must be a known notification category and the value a boolean.
+         * Accepting arbitrary keys would let a client grow the stored document
+         * without bound.
+         */
+        /**
+         * The same keys the clients render. A separate server-side vocabulary would
+         * drift, and then a switch the user flips would be rejected as unknown.
+         */
+        if (!NOTIFICATION_KEYS.includes(key as (typeof NOTIFICATION_KEYS)[number])) {
+          res.status(400).json({ error: 'unknown_notification_type', detail: `Unknown notification type: ${key}` });
+          return;
+        }
+        if (typeof value !== 'boolean') {
+          res.status(400).json({ error: 'invalid_preference', detail: `${key} must be a boolean.` });
+          return;
+        }
+        merged[key] = value;
+      }
+      current.notifications = merged;
+    }
+
+    user.preferences = current;
+    changed.push('preferences');
+  }
+
+  if (!changed.length) {
+    res.status(400).json({ error: 'nothing_to_update', detail: 'Send at least one field to change.' });
+    return;
+  }
+
+  users.upsert(user);
+  res.json({
+    ok: true,
+    changed,
+    user,
+    profile: publicProfile(user.id),
+    preferences: preferencesFor(user),
+  });
+});
+
+/** The caller's own account, including preferences the public profile omits. */
+app.get('/api/me', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  res.json({
+    user,
+    profile: publicProfile(user.id),
+    preferences: preferencesFor(user),
+  });
+});
+
+/**
+ * The caller's own data, as a download.
+ *
+ * NDPR, CCPA, UK GDPR and PIPEDA all grant a right of access, and the settings
+ * screen has always claimed to honour it — but the button only raised a toast
+ * promising an archive "within 30 days" and nothing was ever produced. A promise
+ * that cannot be kept is worse than a smaller promise that is.
+ *
+ * This returns the data immediately, scoped to the caller, with credentials
+ * excluded: a session token in an archive is a live credential in a file the user
+ * will email around.
+ */
+app.get('/api/me/export', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+
+  const asBuyer = orders.buying(userId);
+  const asSeller = orders.selling(userId);
+
+  const archive = {
+    exportedAt: store.iso(),
+    notice: 'This is every record MoneyMart holds about your account. Session tokens and linked sign-in identities are deliberately excluded.',
+    account: {
+      id: user.id,
+      email: user.email,
+      phone: user.phone ?? null,
+      displayName: user.displayName,
+      handle: user.handle,
+      bio: user.bio ?? null,
+      countryCode: user.countryCode,
+      currencyCode: user.currencyCode,
+      role: user.role,
+      isPro: user.isPro,
+      verificationStatus: user.verificationStatus,
+      kycLevel: user.kycLevel,
+      preferences: preferencesFor(user),
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt ?? null,
+    },
+    /**
+     * Bids are stored per AUCTION, so the caller's own bids are gathered across
+     * every lot rather than read from a per-bidder index that does not exist.
+     */
+    bids: auctions
+      .all()
+      .flatMap((auction) => auctions.bids(auction.id).filter((bid) => bid.bidderId === userId))
+      .map((bid) => ({
+        id: bid.id,
+        auctionId: bid.auctionId,
+        amount: bid.amount,
+        status: bid.status,
+        placedAt: bid.timestamp,
+      })),
+    orders: { buying: asBuyer, selling: asSeller },
+    payouts: payouts.bySeller(userId),
+    notifications: notifications.forUser(userId),
+    listings: auctions.bySeller(userId),
+  };
+
+  /**
+   * `Content-Disposition` so a browser saves it rather than rendering JSON, and a
+   * dated filename so several exports are distinguishable.
+   */
+  res.setHeader('content-type', 'application/json; charset=utf-8');
+  res.setHeader('content-disposition', `attachment; filename="moneymart-account-${user.handle}-${store.iso().slice(0, 10)}.json"`);
+  res.send(JSON.stringify(archive, null, 2));
 });
 
 /* ── REST: social sign-in (§9.1 Auth Service) ───────────────────────────── */

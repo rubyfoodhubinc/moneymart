@@ -9,6 +9,7 @@ import { PageHeader, Section } from '@/components/site-shell';
 import { Button, Card, Pill, Toast, ToastStack, VerifiedBadge } from '@/components/ui';
 import { CheckIcon, GlobeIcon, SettingsIcon, ShieldIcon, TruckIcon, WalletIcon } from '@/components/icons';
 import { currency as currencyMeta, type CurrencyCode } from '@moneymart/tokens';
+import { api } from '@/lib/api';
 import { useSession } from '@/store/session';
 
 const LANGUAGES = ['English', 'Yoruba', 'Igbo', 'Hausa', 'Français', 'Kiswahili', 'العربية'];
@@ -29,14 +30,49 @@ export default function SettingsPage() {
   const signOut = useSession((state) => state.signOut);
   const users = useSession((state) => state.users);
 
-  const [language, setLanguage] = useState('English');
+  /**
+   * Preferences are read from the ACCOUNT, not hardcoded.
+   *
+   * Every control on this screen previously held its own component state: currency,
+   * language, privacy and notifications all appeared to change and were discarded
+   * the moment the user navigated away, because there was no endpoint to save them
+   * to. They now seed from the stored record so the screen shows what is actually
+   * in force.
+   */
+  const saveAccount = useSession((state) => state.saveAccount);
+  const stored = user?.preferences;
+
+  const [language, setLanguage] = useState(stored?.language ?? 'en');
   const [currency, setCurrency] = useState<CurrencyCode>((user?.currencyCode as CurrencyCode) ?? 'USD');
   const [toggles, setToggles] = useState<Record<string, boolean>>(
-    Object.fromEntries(NOTIFICATION_TYPES.map((entry) => [entry.key, entry.on])),
+    Object.fromEntries(NOTIFICATION_TYPES.map((entry) => [entry.key, stored?.notifications?.[entry.key] ?? entry.on])),
   );
-  const [publicProfile, setPublicProfile] = useState(true);
-  const [bidHistoryVisible, setBidHistoryVisible] = useState(true);
+  const [publicProfile, setPublicProfile] = useState(stored?.publicProfile ?? true);
+  const [bidHistoryVisible, setBidHistoryVisible] = useState(stored?.bidHistoryPublic ?? true);
   const [message, setMessage] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  /**
+   * Persist, then report what the server actually stored.
+   *
+   * The optimistic local update is kept so the control does not flicker, but a
+   * refusal reverts it — a toggle that stays flipped after the save failed is the
+   * same lie as a toggle that never saved.
+   */
+  const persist = async (
+    patch: Parameters<typeof saveAccount>[0],
+    revert: () => void,
+    success: string,
+  ) => {
+    setMessage(null);
+    setFailed(null);
+    const result = await saveAccount(patch);
+    if (result.ok) setMessage(success);
+    else {
+      revert();
+      setFailed(result.error ?? 'Could not save that change.');
+    }
+  };
 
   return (
     <Section>
@@ -107,7 +143,15 @@ export default function SettingsPage() {
               <li key={entry.key}>
                 <button
                   type="button"
-                  onClick={() => setToggles((current) => ({ ...current, [entry.key]: !current[entry.key] }))}
+                  onClick={() => {
+                    const next = !toggles[entry.key];
+                    setToggles((current) => ({ ...current, [entry.key]: next }));
+                    void persist(
+                      { preferences: { notifications: { [entry.key]: next } } },
+                      () => setToggles((current) => ({ ...current, [entry.key]: !next })),
+                      `${entry.label} ${next ? 'on' : 'off'} and saved to your account.`,
+                    );
+                  }}
                   className="flex w-full items-center justify-between gap-4 rounded-[11px] border border-white/8 px-3.5 py-3 text-left transition-colors"
                   style={{ background: 'rgba(255,255,255,0.02)' }}
                 >
@@ -132,7 +176,13 @@ export default function SettingsPage() {
             size="sm"
             variant="navy"
             className="mt-4"
-            onClick={() => setMessage('Notification preferences saved. Delivery channels: push (FCM), email (SendGrid), SMS fallback (Twilio).')}
+            onClick={() =>
+                void persist(
+                  { preferences: { notifications: toggles } },
+                  () => undefined,
+                  'Notification preferences saved to your account.',
+                )
+              }
             icon={<CheckIcon size={14} />}
           >
             Save preferences
@@ -148,13 +198,51 @@ export default function SettingsPage() {
             NDPR, CCPA, UK GDPR and PIPEDA apply depending on your registered country. Export or delete your data at
             any time.
           </p>
-          <PrivacyRow label="Public profile" hint="Anyone can view your shop and listings" on={publicProfile} onToggle={() => setPublicProfile((value) => !value)} />
-          <PrivacyRow label="Show my bids publicly" hint="Bid history stays anonymised either way" on={bidHistoryVisible} onToggle={() => setBidHistoryVisible((value) => !value)} />
+          <PrivacyRow label="Public profile" hint="Anyone can view your shop and listings" on={publicProfile} onToggle={() => {
+                const next = !publicProfile;
+                setPublicProfile(next);
+                void persist(
+                  { preferences: { publicProfile: next } },
+                  () => setPublicProfile(!next),
+                  `Public profile ${next ? 'on' : 'off'} and saved to your account.`,
+                );
+              }} />
+          <PrivacyRow label="Show my bids publicly" hint="Bid history stays anonymised either way" on={bidHistoryVisible} onToggle={() => {
+                const next = !bidHistoryVisible;
+                setBidHistoryVisible(next);
+                void persist(
+                  { preferences: { bidHistoryPublic: next } },
+                  () => setBidHistoryVisible(!next),
+                  `Bid history ${next ? 'public' : 'private'} and saved to your account.`,
+                );
+              }} />
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button size="sm" variant="navy" onClick={() => setMessage('Data export requested — you will receive a JSON archive by email within 30 days.')}>
+              <Button size="sm" variant="navy" onClick={async () => {
+                /**
+                 * A real download, not a promise of one.
+                 *
+                 * The button previously said an archive would arrive by email
+                 * within 30 days and nothing was ever produced. The right of
+                 * access is honoured immediately, in the browser.
+                 */
+                try {
+                  const blob = await api.exportAccount();
+                  const url = URL.createObjectURL(blob);
+                  const anchor = document.createElement('a');
+                  anchor.href = url;
+                  anchor.download = 'moneymart-account.json';
+                  document.body.appendChild(anchor);
+                  anchor.click();
+                  anchor.remove();
+                  URL.revokeObjectURL(url);
+                  setMessage('Your data archive has been downloaded.');
+                } catch {
+                  setFailed('Could not build your export. Please try again.');
+                }
+              }}>
               Export my data
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setMessage('Account deletion requires email confirmation. No data is removed until you confirm.')}>
+            <Button size="sm" variant="ghost" onClick={() => setFailed('Account deletion needs an email confirmation flow, which is not connected on this deployment. Contact support and the account will be closed by hand.')}>
               Delete account
             </Button>
           </div>
@@ -178,7 +266,7 @@ export default function SettingsPage() {
               Identity verification: level {user?.kycLevel ?? 0} ({user?.verificationStatus ?? 'unverified'}). High-value
               lots and payouts above threshold require level 2+.
             </p>
-            <Button size="sm" variant="gold" className="mt-3" onClick={() => setMessage('Identity upload flow opens here — document capture, then a selfie liveness check.')}>
+            <Button size="sm" variant="gold" className="mt-3" onClick={() => setFailed('Identity verification needs a KYC provider, which is not connected on this deployment. Until then your level stays at ' + (user?.kycLevel ?? 0) + '.')}>
               Complete verification
             </Button>
           </div>
@@ -271,6 +359,8 @@ export default function SettingsPage() {
 
       <ToastStack>
         {message ? <Toast tone="green" title="Settings" body={message} onDismiss={() => setMessage(null)} /> : null}
+        {/* A refusal is reported too, or a control would silently do nothing. */}
+        {failed ? <Toast tone="gold" title="Not available" body={failed} onDismiss={() => setFailed(null)} /> : null}
       </ToastStack>
     </Section>
   );

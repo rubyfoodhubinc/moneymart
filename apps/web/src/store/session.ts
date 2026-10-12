@@ -10,7 +10,7 @@
  * must not flash a sign-in prompt at a returning user.
  */
 import { create } from 'zustand';
-import type { PublicProfile, User } from '@moneymart/types';
+import type { PublicProfile, User, UserPreferences } from '@moneymart/types';
 import { api } from '@/lib/api';
 import { clearToken, getToken, setToken } from '@/lib/token';
 import { refreshSocketAuth } from '@/lib/socket';
@@ -58,6 +58,20 @@ export interface SessionState {
   signInRequested: boolean;
   requestSignIn: (reason?: string) => void;
   clearSignInRequest: () => void;
+  /**
+   * Persist a change to the signed-in account.
+   *
+   * Returns the server's answer rather than assuming success: the whole point of
+   * this action is that the previous behaviour silently discarded the change.
+   */
+  saveAccount: (patch: {
+    displayName?: string;
+    bio?: string;
+    countryCode?: string;
+    currencyCode?: string;
+    avatarUrl?: string;
+    preferences?: Partial<UserPreferences>;
+  }) => Promise<{ ok: boolean; error?: string }>;
   signOut: () => Promise<void>;
   /** Development-only: switch identity without a code. */
   switchUser: (userId: string) => Promise<void>;
@@ -147,6 +161,21 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   cancelChallenge: () => set({ pending: null, error: null }),
+
+  saveAccount: async (patch) => {
+    set({ busy: true, error: null });
+    try {
+      const result = await api.updateMe(patch);
+      // The response carries the authoritative record, so the shell updates without
+      // a second round trip and cannot drift from what was stored.
+      set({ busy: false, user: result.user, profile: result.profile, error: null });
+      return { ok: true };
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Could not save those changes.';
+      set({ busy: false, error: message });
+      return { ok: false, error: message };
+    }
+  },
 
   signOut: async () => {
     try {

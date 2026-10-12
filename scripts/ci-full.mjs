@@ -55,6 +55,7 @@ const API_SUITES = [
   'verify-dispute.mjs',
   'verify-restart.mjs',
   'verify-concurrency.mjs',
+  'verify-preferences.mjs',
 ];
 
 /**

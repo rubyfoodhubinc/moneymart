@@ -49,7 +49,17 @@ export default function WalletPage() {
         subtitle="Escrow releases seller funds 7–10 days after buyer confirmation. Withdraw to bank, mobile money or hold as wallet balance."
         action={
           <div className="flex flex-wrap gap-2">
-            <Button variant="gold" icon={<PlusIcon size={15} />} onClick={() => setMessage('Add-funds sheet opens here (Stripe Payment Element / Paystack).')}>
+            <Button variant="gold" icon={<PlusIcon size={15} />} /**
+               * Top-ups go through a payment provider, and none is connected on this
+               * deployment. The button used to raise a toast saying a sheet "opens
+               * here" — a sheet that does not exist. It now says what is actually
+               * true, which is more useful than a promise.
+               */
+              onClick={() =>
+                setMessage(
+                  'Adding funds needs a connected payment provider. Until one is configured, top up by winning a lot — escrow and payouts work today.',
+                )
+              }>
               Add funds
             </Button>
             <Button variant="navy" icon={<WalletIcon size={15} />} onClick={() => setMessage('Withdrawal request queued — payout typically settles in 1–2 business days.')}>
