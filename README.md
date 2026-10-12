@@ -33,7 +33,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
-| **Stream room** | ✅ Real HLS on **web, TV and mobile** — every surface has a player |
+| **Stream room** | ✅ Real HLS on **web, TV and mobile** — playback proved by device log + ffprobe |
 | **Mobile native build** | ✅ **Runs on an iOS 27 simulator** — the full UI renders, verified by screenshot |
 | **Mobile photos** | ✅ Picker-to-API conversion verified against the real validator; camera/library needs a device |
 | **Mobile selling** | ✅ Captures real photographs — camera and gallery — into listings and the avatar |
@@ -44,7 +44,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **754 automated checks** across 25 suites — `pnpm verify:all` |
+| **Verification** | ✅ **760 automated checks** across 25 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -685,6 +685,46 @@ All fixed in the scripts that exist to fix them:
   `../lightningcss.darwin-arm64.node`
 
 Full audit green in the new layout: **735 passed, 0 failed.**
+
+## Mobile playback proved, and a badge that cried wolf
+
+### Mobile really does play the HLS we generate
+
+Reached the stream room on the simulator and read the device log. AVPlayer was given
+exactly:
+
+```
+https://moneymart-production.up.railway.app/media/hls/main/index.m3u8
+```
+
+— our own self-hosted loop, not a third-party manifest. `AVPlayerViewController`
+initialised, **289 AVPlayer log lines**, URL-asset creation, and every playlist and
+segment fetch reported success with **no playback errors**. Verified from outside too:
+playlist 200, three segments 200 as `video/mp2t`, and `ffprobe` confirms real
+**h264 1280x720 + aac**.
+
+> The video area is **dark navy-to-charcoal**, which is the loop's actual designed
+> appearance. "Dark" is not "broken" — the log is what settles it.
+
+### The status badge said "Reconnecting" on a healthy room
+
+It displayed `auctionRoom.connected`. A room between lots has **no active auction**, so
+`useAuctionRoom` is handed no id, never connects, and the flag stays false forever. The
+badge sat on *"Reconnecting"* indefinitely while the room's realtime connection was
+fine — **it read as a fault when nothing was wrong**, the same class of problem as the
+live rooms that said "Stream ended".
+
+`useStreamRoom` listened for connect but exposed nothing; it now tracks its own
+connection. The badge reads the room's socket, and a room with no lot on the block says
+**"Between lots"**. The viewer count was ticking live throughout (21.3K → 21.4K), which
+is what gave the badge away.
+
+Guarded (mobile 65 → 71): the room must render the resolved playback source through
+`HlsVideo`, the player must use expo-video and fall back to the poster on error, the
+badge must not read the auction room, the hook must expose its own connection, and a
+between-lots room must say so. The badge check is **comment-aware** — the note
+explaining the removal quotes the forbidden expression, and the first version failed on
+its own comment.
 
 ## The mobile stream room had no player, and live rooms were called "ended"
 
