@@ -16,7 +16,7 @@
  * Usage: node scripts/verify-hls.mjs [--timeout 45000]
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,13 +46,31 @@ const bad = (label, extra = '') => {
   console.log(`  \u001b[31m✘\u001b[0m ${label}${extra ? `  ${extra}` : ''}`);
 };
 
-const MANIFEST = process.env.MM_PROOF_HLS ?? 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+/**
+ * Every manifest the resolver can hand a room.
+ *
+ * They are read from engine/playback.ts rather than duplicated here, so adding a
+ * source cannot silently escape verification — a manifest that is reachable but
+ * undecodable is exactly the failure this suite exists to catch.
+ */
+function demoManifests() {
+  const source = readFileSync(path.join(repoRoot, 'services', 'api', 'src', 'engine', 'playback.ts'), 'utf8');
+  const block = source.slice(source.indexOf('DEMO_MANIFESTS'), source.indexOf(']', source.indexOf('DEMO_MANIFESTS')));
+  return [...block.matchAll(/'(https:\/\/[^']+)'/g)].map((match) => match[1]);
+}
+
+const MANIFESTS = process.env.MM_PROOF_HLS ? [process.env.MM_PROOF_HLS] : demoManifests();
 const PROOF_DIR = '/tmp/mm-hls-proof';
 const CDP_PORT = 9333;
 const WEB_PORT = 4599;
 
 console.log('\n\u001b[1m════════ MoneyMart HLS playback proof ════════\u001b[0m');
-console.log(`\u001b[2m  manifest ${MANIFEST}\u001b[0m`);
+if (!MANIFESTS.length) {
+  console.log('  \u001b[31m✘\u001b[0m no demo manifests found in engine/playback.ts');
+  process.exit(1);
+}
+console.log(`\u001b[2m  ${MANIFESTS.length} manifest(s) to prove\u001b[0m`);
+MANIFESTS.forEach((manifest, index) => console.log(`\u001b[2m    ${index + 1}. ${manifest}\u001b[0m`));
 
 /* ── Resolve the shipped hls.js bundle ─────────────────────────────────── */
 const assetsDir = path.join(repoRoot, 'apps', 'web', 'dist', 'assets');
@@ -74,32 +92,85 @@ if (hlsChunk) {
   writeFileSync(path.join(PROOF_DIR, 'hls.mjs'), (await import('node:fs')).readFileSync(path.join(assetsDir, hlsChunk)));
 }
 
-const proofPage = `<!doctype html><html><head><meta charset="utf-8"><title>hls-proof</title></head>
+/**
+ * The proof page walks every manifest in one document.
+ *
+ * Earlier this navigated between manifests, but Page.navigate resets the JS
+ * execution context and console events stop arriving, so only the first source
+ * was ever proven. Running them in sequence inside one page keeps one context
+ * and one set of listeners for the whole run.
+ */
+const proofPage = (manifests) => `<!doctype html><html><head><meta charset="utf-8"><title>hls-proof</title></head>
 <body style="margin:0;background:#000">
 <video id="v" muted playsinline style="width:640px;height:360px"></video>
 <script type="module">
   const report = (obj) => console.log('PROOF:' + JSON.stringify(obj));
   window.addEventListener('error', (e) => report({ kind: 'window-error', message: String(e.message) }));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const manifests = ${JSON.stringify(manifests)};
+
+  let Hls;
   try {
-    const { default: Hls } = await import('./hls.mjs');
-    report({ kind: 'loaded', supported: Hls.isSupported(), version: Hls.version });
+    ({ default: Hls } = await import('./hls.mjs'));
+    report({ kind: 'browser', supported: Hls.isSupported(), version: Hls.version });
+  } catch (e) {
+    // A return is illegal at module top level; guard with a throw instead.
+    report({ kind: 'exception', message: String(e && e.message || e) });
+    throw e;
+  }
+
+  for (let index = 0; index < manifests.length; index += 1) {
+    const manifest = manifests[index];
     const video = document.getElementById('v');
-    const hls = new Hls({ lowLatencyMode: true });
-    let parsed = false, frags = 0, bytes = 0;
-    hls.on(Hls.Events.MANIFEST_PARSED, (_e, d) => {
-      parsed = true;
-      report({ kind: 'manifest-parsed', levels: d.levels.length, heights: d.levels.map(l => l.height).filter(Boolean) });
-      video.play().catch((err) => report({ kind: 'play-rejected', message: String(err && err.name || err) }));
+    report({ kind: 'begin', index, manifest });
+
+    await new Promise((resolve) => {
+      const hls = new Hls({ lowLatencyMode: true });
+      let frags = 0;
+      let settled = false;
+      const finish = (summary) => {
+        if (settled) return;
+        settled = true;
+        report(Object.assign({ kind: 'summary', index, manifest }, summary));
+        try { hls.destroy(); } catch (e) {}
+        video.removeAttribute('src');
+        try { video.load(); } catch (e) {}
+        resolve();
+      };
+
+      hls.on(Hls.Events.MANIFEST_PARSED, (_e, d) => {
+        report({ kind: 'manifest-parsed', index, levels: d.levels.length, heights: d.levels.map(l => l.height).filter(Boolean) });
+        video.play().catch((err) => report({ kind: 'play-rejected', index, message: String(err && err.name || err) }));
+      });
+      hls.on(Hls.Events.LEVEL_LOADED, (_e, d) => report({ kind: 'level-loaded', index, fragments: d.details.fragments.length, live: d.details.live }));
+      hls.on(Hls.Events.FRAG_LOADED, () => { frags += 1; });
+      hls.on(Hls.Events.ERROR, (_e, d) => {
+        report({ kind: 'hls-error', index, fatal: d.fatal, details: d.details });
+        if (d.fatal) {
+          setTimeout(() => finish({ parsed: false, frags, readyState: video.readyState, videoWidth: 0, videoHeight: 0, currentTime: 0, buffered: 0 }), 1200);
+        }
+      });
+
+      hls.loadSource(manifest);
+      hls.attachMedia(video);
+
+      // Give each source a fixed window to prove itself.
+      setTimeout(() => finish({
+        parsed: true,
+        frags,
+        readyState: video.readyState,
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight,
+        currentTime: video.currentTime,
+        buffered: video.buffered.length ? video.buffered.end(0) : 0,
+      }), 14000);
     });
-    hls.on(Hls.Events.LEVEL_LOADED, (_e, d) => report({ kind: 'level-loaded', fragments: d.details.fragments.length, live: d.details.live }));
-    hls.on(Hls.Events.FRAG_LOADED, (_e, d) => { frags += 1; bytes += (d.frag && d.frag.stats && d.frag.stats.total) || 0; });
-    hls.on(Hls.Events.ERROR, (_e, d) => report({ kind: 'hls-error', fatal: d.fatal, type: d.type, details: d.details }));
-    hls.loadSource(${JSON.stringify(MANIFEST)});
-    hls.attachMedia(video);
-    setTimeout(() => report({ kind: 'summary', parsed, frags, bytes, readyState: video.readyState, videoWidth: video.videoWidth, videoHeight: video.videoHeight, currentTime: video.currentTime, buffered: video.buffered.length ? video.buffered.end(0) : 0 }), 16000);
-  } catch (e) { report({ kind: 'exception', message: String(e && e.message || e) }); }
+
+    await sleep(400);
+  }
+  report({ kind: 'done' });
 </script></body></html>`;
-writeFileSync(path.join(PROOF_DIR, 'index.html'), proofPage);
+writeFileSync(path.join(PROOF_DIR, 'index.html'), proofPage(MANIFESTS));
 
 const chromePath = CHROME_CANDIDATES.find((candidate) => existsSync(candidate));
 if (!chromePath) {
@@ -110,6 +181,7 @@ if (!chromePath) {
 ok('a Chromium browser is available', path.basename(chromePath));
 
 /* ── Serve the proof page ──────────────────────────────────────────────── */
+let activeManifest = MANIFESTS[0];
 const server = createServer((req, res) => {
   const file = path.join(PROOF_DIR, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
   import('node:fs').then(({ readFile }) => {
@@ -173,7 +245,7 @@ const cleanup = () => {
 const overallTimer = setTimeout(() => {
   bad('playback completed within the time budget', `${OVERALL_TIMEOUT_MS}ms`);
   cleanup();
-  report();
+  reportAll();
 }, OVERALL_TIMEOUT_MS);
 
 function send(method, params = {}, sessionId) {
@@ -205,22 +277,23 @@ async function connect() {
         } catch {
           return;
         }
-        if (payload.method === 'Runtime.consoleAPICalled') {
-          const text = (payload.params.args ?? [])
-            .map((arg) => (arg.value !== undefined ? String(arg.value) : (arg.description ?? '')))
-            .join(' ');
-          if (text.startsWith('PROOF:')) {
-            try {
-              events.push(JSON.parse(text.slice('PROOF:'.length)));
-            } catch {
-              /* ignore malformed */
-            }
-          }
-          if (events.some((event) => event.kind === 'summary')) {
-            clearTimeout(overallTimer);
-            cleanup();
-            report();
-          }
+        if (payload.method !== 'Runtime.consoleAPICalled') return;
+
+        const text = (payload.params.args ?? [])
+          .map((arg) => (arg.value !== undefined ? String(arg.value) : (arg.description ?? '')))
+          .join(' ');
+        if (!text.startsWith('PROOF:')) return;
+        try {
+          events.push(JSON.parse(text.slice('PROOF:'.length)));
+        } catch {
+          /* ignore malformed line */
+        }
+
+        // The page signals completion once every manifest has been proven.
+        if (events.some((event) => event.kind === 'done')) {
+          clearTimeout(overallTimer);
+          cleanup();
+          reportAll();
         }
       });
 
@@ -235,57 +308,77 @@ async function connect() {
   return false;
 }
 
-function report() {
-  const loaded = events.find((event) => event.kind === 'loaded');
+/** Assert one manifest's playback evidence. */
+function reportOne(manifest, events) {
+  const short = manifest.replace(/^https?:\/\//, '').slice(0, 66);
+  console.log(`\n\u001b[1m  ${short}\u001b[0m`);
+
   const parsed = events.find((event) => event.kind === 'manifest-parsed');
   const level = events.find((event) => event.kind === 'level-loaded');
   const summary = events.find((event) => event.kind === 'summary');
   const errors = events.filter((event) => event.kind === 'hls-error' || event.kind === 'exception' || event.kind === 'window-error');
   const fatal = errors.filter((event) => event.fatal !== false);
 
-  console.log();
-  if (!loaded) {
-    bad('the shipped hls.js bundle loaded in the browser');
-  } else {
-    ok('the shipped hls.js bundle loaded in the browser', `v${loaded.version ?? '?'}`);
-    loaded.supported ? ok('Media Source Extensions are supported') : bad('Media Source Extensions are supported');
-  }
-
   parsed
     ? ok(
-        'the HLS manifest parsed',
+        'manifest parsed',
         `${parsed.levels} rendition(s)${parsed.heights?.length ? ` · ${parsed.heights.join('/')}p` : ''}`,
       )
-    : bad('the HLS manifest parsed', errors.find((event) => event.kind === 'hls-error')?.details ?? 'no manifest event');
+    : bad(`${short}: manifest parsed`, errors.find((event) => event.kind === 'hls-error')?.details ?? 'no manifest event');
 
-  level
-    ? ok('a media playlist loaded', `${level.fragments} fragment(s) · ${level.live ? 'live' : 'vod'}`)
-    : bad('a media playlist loaded');
+  level ? ok('media playlist loaded', `${level.fragments} fragment(s)`) : bad(`${short}: media playlist loaded`);
 
-  if (summary) {
-    summary.frags > 0
-      ? ok('media fragments were fetched and fed to the element', `${summary.frags} fragment(s)`)
-      : bad('media fragments were fetched and fed to the element', '0 fragments');
-    summary.readyState >= 3
-      ? ok('the element reached HAVE_FUTURE_DATA or better', `readyState ${summary.readyState}`)
-      : bad('the element reached HAVE_FUTURE_DATA or better', `readyState ${summary.readyState}`);
-    summary.videoWidth > 0 && summary.videoHeight > 0
-      ? ok('video frames decoded at a real resolution', `${summary.videoWidth}x${summary.videoHeight}`)
-      : bad('video frames decoded at a real resolution', `${summary.videoWidth}x${summary.videoHeight}`);
-    summary.buffered > 0
-      ? ok('audio/video is buffered', `${summary.buffered.toFixed(1)}s ahead`)
-      : bad('audio/video is buffered', '0s');
-    summary.currentTime > 0
-      ? ok('playback advanced past the start', `t=${summary.currentTime.toFixed(2)}s`)
-      : bad('playback advanced past the start', 't=0 — decoded but never played');
-  } else {
-    bad('a playback summary was produced within the budget');
+  if (!summary) {
+    bad(`${short}: a playback summary was produced`);
+    return;
   }
 
-  // Fatal errors are separate from the recovery the player performs.
+  summary.frags > 0
+    ? ok('fragments fetched into the element', `${summary.frags}`)
+    : bad(`${short}: fragments fetched into the element`);
+  summary.readyState >= 3
+    ? ok('element reached HAVE_FUTURE_DATA', `readyState ${summary.readyState}`)
+    : bad(`${short}: element reached HAVE_FUTURE_DATA`, `readyState ${summary.readyState}`);
+  summary.videoWidth > 0
+    ? ok('frames decoded at a real resolution', `${summary.videoWidth}x${summary.videoHeight}`)
+    : bad(`${short}: frames decoded at a real resolution`);
+  summary.buffered > 0
+    ? ok('media buffered', `${summary.buffered.toFixed(1)}s ahead`)
+    : bad(`${short}: media buffered`);
+  summary.currentTime > 0
+    ? ok('playback advanced past the start', `t=${summary.currentTime.toFixed(2)}s`)
+    : bad(`${short}: playback advanced past the start`, 'decoded but never played');
+
   fatal.length === 0
-    ? ok('no fatal playback errors occurred')
-    : bad('no fatal playback errors occurred', fatal.map((event) => event.details ?? event.message).join('; ').slice(0, 90));
+    ? ok('no fatal playback errors')
+    : bad(`${short}: no fatal playback errors`, fatal.map((event) => event.details ?? event.message).join('; ').slice(0, 80));
+}
+
+function reportAll() {
+  /**
+   * The capability event is emitted once, before any manifest is walked, so it
+   * carries no manifest index and is asserted globally rather than per source.
+   */
+  const browser = events.find((event) => event.kind === 'browser');
+  browser
+    ? ok('the shipped hls.js bundle loaded in the browser', `v${browser.version ?? '?'}`)
+    : bad('the shipped hls.js bundle loaded in the browser');
+  browser && !browser.supported ? bad('Media Source Extensions are supported') : null;
+  browser?.supported ? ok('Media Source Extensions are supported') : null;
+
+  MANIFESTS.forEach((manifest, index) => {
+    reportOne(
+      manifest,
+      events.filter((event) => event.index === index),
+    );
+  });
+
+  const missing = MANIFESTS.filter((_manifest, index) => !events.some((event) => event.index === index && event.kind === 'summary'));
+  if (missing.length) {
+    missing.forEach((manifest) => bad(`${manifest.slice(0, 60)}: produced playback evidence`));
+  } else {
+    ok(`all ${MANIFESTS.length} resolver manifests produced playback evidence`);
+  }
 
   console.log('\n\u001b[1m═══════════════════════════════════════════════\u001b[0m');
   const colour = fail === 0 ? '\u001b[32m' : '\u001b[31m';
@@ -300,5 +393,5 @@ if (!connected) {
   clearTimeout(overallTimer);
   bad('connected to the browser DevTools endpoint');
   cleanup();
-  report();
+  reportAll();
 }
