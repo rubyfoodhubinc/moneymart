@@ -368,6 +368,17 @@ const chrome = spawn(
     '--no-first-run',
     '--no-default-browser-check',
     '--autoplay-policy=no-user-gesture-required',
+    /**
+     * Required on CI.
+     *
+     * This suite passed locally and failed in the release gate with
+     * "connected to the browser DevTools endpoint" — the only failure mode that fits
+     * is Chrome refusing to start. The Linux runner has no usable sandbox, so the
+     * browser dies before it opens the debugging port, and every manifest check then
+     * fails for a reason unrelated to playback.
+     */
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
     `--remote-debugging-port=${CDP_PORT}`,
     `--user-data-dir=${path.join(PROOF_DIR, 'profile')}`,
     'about:blank',
