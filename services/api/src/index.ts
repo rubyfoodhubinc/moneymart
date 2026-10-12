@@ -34,6 +34,7 @@ import { rateLimit, POLICIES, limiterStatus, resetRateLimits, startLimiterSweep 
 import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
 import { authService } from './engine/auth.js';
 import { resolveStreamPlayback } from './engine/playback.js';
+import { validateImages, MAX_IMAGES } from './lib/images.js';
 import {
   auctions,
   chat,
@@ -129,7 +130,15 @@ function corsOrigin(
 }
 
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(express.json({ limit: '2mb' }));
+/**
+ * Body limit.
+ *
+ * Sized so the image validator is what refuses an oversized payload, rather than
+ * the parser cutting the request off first with an opaque error. The per-image
+ * ceiling is 3 MB of raw bytes, which is roughly 4 MB once base64-encoded, so a
+ * full gallery needs headroom well beyond the old 2 MB.
+ */
+app.use(express.json({ limit: '16mb' }));
 
 /**
  * Rate limiting.
@@ -859,6 +868,20 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     return;
   }
 
+  /**
+   * Validate images before anything is written.
+   *
+   * Previously any string was stored verbatim: a script-bearing SVG was accepted
+   * and redistributed, and a 1.5 MB data URI inflated every read. The check
+   * refuses the request rather than silently dropping offending entries, so a
+   * client is told which image failed and why.
+   */
+  const imageCheck = validateImages(body.images);
+  if (!imageCheck.ok) {
+    res.status(400).json({ error: 'invalid_images', detail: imageCheck.reason, maxImages: MAX_IMAGES });
+    return;
+  }
+
   const sellerId = actorId(req, body.sellerId);
   const seller = users.require(sellerId);
   const now = Date.now();
@@ -873,7 +896,7 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     description: body.description ?? '',
     categoryId: body.categoryId ?? 'collectibles',
     condition: body.condition ?? 'good',
-    images: body.images?.length ? body.images : [],
+    images: imageCheck.values,
     authenticityStatus: 'pending',
     isVerified: false,
     createdAt: store.iso(),
@@ -1968,6 +1991,28 @@ const staticResult = mountStaticHost(app, {
 });
 
 /* ── Error handling ────────────────────────────────────────────────────── */
+
+app.use((error: Error & { type?: string; status?: number }, req: Request, res: Response, next: NextFunction) => {
+  /**
+   * A payload over the limit is a CLIENT error, not a server fault.
+   *
+   * Express's body parser threw this and the generic handler reported 500, which
+   * misleads the caller and pollutes error tracking with what is really a bad
+   * request. 413 with a specific reason lets a client shrink the payload.
+   */
+  if (error?.type === 'entity.too.large' || error?.status === 413) {
+    res.status(413).json({
+      error: 'payload_too_large',
+      detail: 'The request body is too large. Send smaller or fewer images.',
+    });
+    return;
+  }
+  if (error?.type === 'entity.parse.failed') {
+    res.status(400).json({ error: 'malformed_json', detail: 'The request body is not valid JSON.' });
+    return;
+  }
+  next(error);
+});
 
 app.use((error: Error, req: Request, res: Response, _next: NextFunction) => {
   /**

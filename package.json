@@ -52,7 +52,8 @@
     "verify:auth": "node scripts/verify-auth.mjs",
     "verify:socket-auth": "node scripts/verify-socket-auth.mjs",
     "verify:rate-limit": "node scripts/verify-rate-limit.mjs",
-    "verify:authorization": "node scripts/verify-authorization.mjs"
+    "verify:authorization": "node scripts/verify-authorization.mjs",
+    "verify:images": "node scripts/verify-images.mjs"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

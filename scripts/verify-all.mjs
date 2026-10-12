@@ -46,6 +46,11 @@ const SUITES = [
     detail: 'OTP flow, canonicalisation, refusals, code hygiene, production posture',
   },
   {
+    name: 'Image input validation',
+    script: 'verify-images.mjs',
+    detail: 'SVG and script payloads refused, type sniffed from bytes, count and size bounded',
+  },
+  {
     name: 'Object-level authorization',
     script: 'verify-authorization.mjs',
     detail: 'orders private to participants, storefront writes owner-scoped, public stays public',
