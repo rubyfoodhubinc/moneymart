@@ -1666,6 +1666,12 @@ app.get('/api/wallet', (req, res) => {
     // Only sales without a payout are still in flight; counting both would
     // double-count a settled order.
     .filter((order) => !settledOrderIds.has(order.id))
+    /**
+     * A refunded sale is not money the seller will ever receive. Counting it
+     * would inflate what they believe they are owed by the full net value of an
+     * order that was returned.
+     */
+    .filter((order) => order.paymentStatus !== 'refunded')
     .reduce((sum, order) => sum + escrow.sellerNetFor(order, categoryForOrder(order.id)), 0);
 
   res.json({
@@ -1688,15 +1694,26 @@ app.get('/api/wallet', (req, res) => {
       })),
       ...selling.map((o) => {
         const payout = sellerPayouts.find((entry) => entry.orderIds.includes(o.id));
+        /**
+         * A refunded sale earned NOTHING.
+         *
+         * This previously reported the seller's net for every sale regardless of
+         * outcome, so a fully refunded order still appeared in the ledger as
+         * income — the seller's transaction list claimed money that had been
+         * returned to the buyer.
+         */
+        // `refunded` is a payment status; OrderStatus has no such member.
+        const refunded = o.paymentStatus === 'refunded';
         return {
           id: `${o.id}-sale`,
           type: 'sale' as const,
-          label: `Sale ${o.id}`,
+          label: refunded ? `Refunded ${o.id}` : `Sale ${o.id}`,
           /**
            * The settled net where a payout exists, otherwise the net the
-           * settlement would produce — never a flat percentage.
+           * settlement would produce — never a flat percentage, and never
+           * anything at all for a refund.
            */
-          amount: payout ? payout.netAmount : escrow.sellerNetFor(o, categoryForOrder(o.id)),
+          amount: refunded ? 0 : payout ? payout.netAmount : escrow.sellerNetFor(o, categoryForOrder(o.id)),
           currency: o.currency,
           at: o.createdAt,
         };

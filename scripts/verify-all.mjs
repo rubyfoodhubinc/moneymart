@@ -51,6 +51,11 @@ const SUITES = [
     detail: 'list → bid → settle → pay → escrow → ship → release → books balance',
   },
   {
+    name: 'Dispute and refund',
+    script: 'verify-dispute.mjs',
+    detail: 'admin-only resolution, refund returns funds, seller-favourable release, no double-resolve',
+  },
+  {
     name: 'Code delivery (SMS + email)',
     script: 'verify-delivery.mjs',
     detail: 'the sent code is the verified code, sender forms, failure reasons',

@@ -60,7 +60,8 @@
     "verify:production-app": "node scripts/verify-production-app.mjs",
     "verify:oauth": "node scripts/verify-oauth.mjs",
     "verify:delivery": "node scripts/verify-delivery.mjs",
-    "verify:lifecycle": "node scripts/verify-lifecycle.mjs"
+    "verify:lifecycle": "node scripts/verify-lifecycle.mjs",
+    "verify:dispute": "node scripts/verify-dispute.mjs"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

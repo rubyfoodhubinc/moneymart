@@ -343,12 +343,25 @@ export function resolveDispute(params: {
     initiatedAt: store.iso(),
     referenceId: `MM-PAY-${store.nextId('r').toUpperCase()}`,
   });
+  /**
+   * The release path must go through `releasing`, exactly as the buyer-confirmed
+   * path does.
+   *
+   * This previously saved the released amount onto the DISPUTED record and then
+   * transitioned that straight to `released`. `ALLOWED.disputed` permits
+   * `releasing`, not `released`, so the transition threw
+   * `illegal_escrow_transition` on every attempt: **an administrator could never
+   * rule a dispute in the seller's favour.** The payout row was still created
+   * first, so the refusal also left a payout in the ledger for escrow that never
+   * released — money recorded twice, once in each direction.
+   */
+  const releasing = transition(record, 'releasing', actorId, 'Dispute resolved in the seller’s favour');
   const released = orderEscrow.save({
-    ...record,
-    releasedAmount: money.round2(record.releasedAmount + payoutAmount),
+    ...releasing,
+    releasedAmount: money.round2(releasing.releasedAmount + payoutAmount),
     payoutId: payout.id,
   });
-  const final = transition(released, 'released', actorId, 'Dispute resolved in the seller’s favour');
+  const final = transition(released, 'released', actorId, 'Funds released to the seller');
   return { escrow: final, order: { ...order, orderStatus: 'complete', paymentStatus: 'paid' } };
 }
 
