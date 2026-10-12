@@ -25,7 +25,8 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Memberships** | ✅ RevenueCat entitlements — Pro pricing 10%/15% enforced server-side |
 | **Live video** | ✅ Real HLS in the stream room — proven decoding in headless Chrome |
 | **Studio** | ✅ Drag-to-reorder sections + seller photo reordering (§5.2) |
-| **Verification** | ✅ **258 automated checks** across 10 suites — `pnpm verify:all` |
+| **Persistence** | ✅ Postgres snapshotting — data survives redeploys (proven in production) |
+| **Verification** | ✅ **278 automated checks** across 11 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -103,6 +104,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Payments & escrow (§9.1)               31 passed
   PASS  TV / IPTV (§7)                         35 passed
   PASS  Payments & membership                  35 passed
+  PASS  Persistence                            20 passed
   PASS  Browser UI (real Chrome)               22 passed
   PASS  HLS playback (real browser)            29 passed
   PASS  Payments & membership                  35 passed
@@ -110,7 +112,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  258 passed   0 failed
+  TOTAL  278 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -121,6 +123,7 @@ pnpm verify            # engine rules over REST (31)
 pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
+pnpm verify:persistence  # restart round-trip, corrupt-snapshot recovery, opt-out (20)
 pnpm verify:ui         # real Chrome: pages mount, drag handles, keyboard reorder (22)
 pnpm verify:hls        # real Chrome decodes every resolver manifest (29)
 pnpm verify:subscriptions  # providers, identity guard, entitlements, Pro pricing (35)
@@ -274,6 +277,56 @@ Connect. The stub says so rather than pretending otherwise.
 Until a key is present the `SimulatedProvider` runs the identical lifecycle, so
 the flow is never dead-ended. Declines are reproducible on demand (amount ending
 `.13`).
+
+## Persistence
+
+The domain store is **in memory**. That is correct for the hot path — a bid must
+not cost a database round trip, and the engine depends on Redis-style ordering
+that SQL would change — but it meant every restart erased users, lots, bids, the
+escrow ledger and memberships, and it pinned the deployment to a single replica.
+
+Access paths are **not** rewritten against SQL. Instead the store snapshots
+itself as a document and restores on boot:
+
+```
+boot → restore snapshot → seed ONLY if nothing was restored → serve
+                       ↘ flush every 15s, and on SIGTERM
+```
+
+Restore happens **before** seeding, deliberately: seeding first would overwrite a
+restored snapshot with demo data on every restart and lose every real listing.
+
+| Adapter | When |
+|---|---|
+| **Postgres** (JSONB row) | `DATABASE_URL` set — the deployment target |
+| **File** (atomic temp+rename) | default locally, so a restart is not automatically lossy |
+| *none* | `MM_PERSISTENCE=off` — used by the verification suites |
+
+Edge cases that are handled rather than assumed:
+
+- **A corrupt snapshot is discarded and the store reseeded.** Refusing to boot
+  would be worse than starting fresh.
+- **A failed flush logs and continues.** Losing a snapshot is less bad than
+  dropping live bids.
+- **The acting session is not persisted.** Restoring it would let one deployment
+  inherit another's identity.
+- **Flushes coalesce** instead of queueing, so a slow database cannot build a
+  backlog.
+
+**Durability is stated honestly:** this is periodic snapshotting, so a hard kill
+can lose the writes since the last flush. The interval *is* the durability
+window — a flush per mutation was rejected because it would serialise the whole
+store on every bid. `SIGTERM` flushes, which covers Railway's redeploy path.
+
+`GET /api/health` reports the active adapter, so durability is observable from
+outside instead of assumed:
+
+```json
+{ "service": "moneymart-api", "persistence": "postgres", "liveAuctions": 13 }
+```
+
+Verified in production: a lot created through the API **survived a full container
+redeploy** (uptime reset, data intact).
 
 ## Drag positioning (§5.2, Studio)
 
