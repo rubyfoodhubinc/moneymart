@@ -41,6 +41,11 @@ const SUITES = [
     detail: 'rails, authorisation, hold, release-on-confirmation, decline, dispute, refund',
   },
   {
+    name: 'Payments & membership',
+    script: 'verify-subscriptions.mjs',
+    detail: 'provider registry, identity guard, entitlement lifecycle, Pro pricing',
+  },
+  {
     name: 'TV / IPTV (§7)',
     script: 'verify-tv.mjs',
     detail: 'QR round-trip, handoff tokens, XMLTV EPG, 10-foot UI, D-pad engine',

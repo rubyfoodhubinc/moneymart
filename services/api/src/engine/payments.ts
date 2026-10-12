@@ -323,9 +323,207 @@ export class PaystackProvider implements PaymentProvider {
   }
 }
 
+/* ── PayPal ─────────────────────────────────────────────────────────────── */
+
+/**
+ * PayPal Orders v2.
+ *
+ * Two-stage by design: an order is created `intent=CAPTURE` (the buyer approves
+ * it client-side), then captured. `createIntent` performs the create and
+ * `confirmIntent` the capture, which maps cleanly onto the escrow service's
+ * requires_payment → in_escrow transition.
+ *
+ * OAuth tokens are cached until shortly before expiry: PayPal issues a token
+ * per credentials pair, and fetching one per request would add a round trip to
+ * every charge and risk the rate limit.
+ */
+export class PayPalProvider implements PaymentProvider {
+  readonly id: PaymentProviderId = 'paypal';
+  readonly label = 'PayPal (cards, balance, USD/GBP/CAD/EUR)';
+  readonly supports = {
+    currencies: ['USD', 'GBP', 'CAD', 'EUR', 'AUD'],
+    countries: ['US', 'GB', 'CA', 'AU', 'DE', 'FR', 'IE', 'NL', 'ES', 'IT'],
+  };
+
+  private readonly clientId: string | undefined;
+  private readonly clientSecret: string | undefined;
+  private readonly apiBase: string;
+
+  private token: { value: string; expiresAt: number } | null = null;
+
+  constructor(
+    clientId = process.env.PAYPAL_CLIENT_ID,
+    clientSecret = process.env.PAYPAL_CLIENT_SECRET,
+    apiBase = process.env.PAYPAL_API_BASE ?? 'https://api-m.sandbox.paypal.com',
+  ) {
+    this.clientId = clientId;
+    this.clientSecret = clientSecret;
+    this.apiBase = apiBase.replace(/\/$/, '');
+  }
+
+  isConfigured(): boolean {
+    return Boolean(this.clientId && this.clientSecret);
+  }
+
+  /** True when pointed at the sandbox rather than live PayPal. */
+  get isSandbox(): boolean {
+    return this.apiBase.includes('sandbox');
+  }
+
+  private async getAccessToken(): Promise<string> {
+    if (!this.isConfigured()) throw new Error('paypal_not_configured');
+    if (this.token && this.token.expiresAt > Date.now() + 30_000) return this.token.value;
+
+    const credentials = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
+    const response = await fetch(`${this.apiBase}/v1/oauth2/token`, {
+      method: 'POST',
+      headers: {
+        authorization: `Basic ${credentials}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: 'grant_type=client_credentials',
+    });
+    const json = (await response.json()) as { access_token?: string; expires_in?: number; error_description?: string };
+    if (!response.ok || !json.access_token) {
+      throw new Error(`paypal_auth_failed:${json.error_description ?? response.status}`);
+    }
+    this.token = {
+      value: json.access_token,
+      expiresAt: Date.now() + (json.expires_in ?? 3000) * 1000,
+    };
+    return this.token.value;
+  }
+
+  private async call(path: string, init: RequestInit = {}) {
+    const accessToken = await this.getAccessToken();
+    const response = await fetch(`${this.apiBase}${path}`, {
+      ...init,
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json',
+        ...(init.headers ?? {}),
+      },
+    });
+    const text = await response.text();
+    const json = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    if (!response.ok) {
+      const details = (json.details as { issue?: string; description?: string }[] | undefined)?.[0];
+      throw new Error(
+        `paypal_error:${json.name ?? response.status}:${details?.issue ?? details?.description ?? json.message ?? 'unknown'}`,
+      );
+    }
+    return json;
+  }
+
+  /** ISO-4217 amount object; PayPal rejects more than two decimal places. */
+  private money(amount: number, currency: string) {
+    return { currency_code: currency, value: amount.toFixed(2) };
+  }
+
+  async createIntent(request: ChargeRequest): Promise<PaymentIntent> {
+    const json = await this.call('/v2/checkout/orders', {
+      method: 'POST',
+      headers: {
+        // Makes a retried create idempotent instead of double-charging.
+        'paypal-request-id': `mm-${request.orderId}`,
+      },
+      body: JSON.stringify({
+        intent: 'CAPTURE',
+        purchase_units: [
+          {
+            reference_id: request.orderId,
+            custom_id: request.customerId,
+            amount: this.money(request.amount, request.currency),
+            description: `MoneyMart order ${request.orderId}`,
+          },
+        ],
+        application_context: {
+          brand_name: 'MoneyMart',
+          user_action: 'PAY_NOW',
+          shipping_preference: 'NO_SHIPPING',
+        },
+      }),
+    });
+
+    const approve = (json.links as { rel: string; href: string }[] | undefined)?.find(
+      (link) => link.rel === 'approve' || link.rel === 'payer-action',
+    );
+
+    return {
+      id: String(json.id),
+      orderId: request.orderId,
+      provider: this.id,
+      amount: request.amount,
+      currency: request.currency as PaymentIntent['currency'],
+      status: 'requires_confirmation',
+      // The client redirects here so the buyer can approve the order.
+      clientSecret: approve?.href,
+      createdAt: store.iso(),
+    };
+  }
+
+  async confirmIntent(intentId: string): Promise<PaymentIntent> {
+    const json = await this.call(`/v2/checkout/orders/${encodeURIComponent(intentId)}/capture`, {
+      method: 'POST',
+      headers: { 'paypal-request-id': `mm-capture-${intentId}` },
+      body: JSON.stringify({}),
+    });
+
+    const status = String(json.status ?? '');
+    const unit = (json.purchase_units as { payments?: { captures?: { amount?: { value?: string; currency_code?: string } }[] } }[] | undefined)?.[0];
+    const capture = unit?.payments?.captures?.[0];
+
+    const mapped: PaymentIntentStatus =
+      status === 'COMPLETED' ? 'succeeded' : status === 'DECLINED' ? 'failed' : 'processing';
+
+    return {
+      id: intentId,
+      orderId: String((json.purchase_units as { reference_id?: string }[] | undefined)?.[0]?.reference_id ?? ''),
+      provider: this.id,
+      amount: capture?.amount?.value ? Number(capture.amount.value) : 0,
+      currency: String(capture?.amount?.currency_code ?? 'USD') as PaymentIntent['currency'],
+      status: mapped,
+      createdAt: store.iso(),
+      settledAt: mapped === 'succeeded' ? store.iso() : undefined,
+    };
+  }
+
+  async refund(request: RefundRequest) {
+    const json = await this.call(`/v2/payments/captures/${encodeURIComponent(request.chargeId)}/refund`, {
+      method: 'POST',
+      headers: { 'paypal-request-id': `mm-refund-${request.orderId}` },
+      body: JSON.stringify({
+        amount: this.money(request.amount, 'USD'),
+        note_to_payer: request.reason ?? 'MoneyMart refund',
+      }),
+    });
+    return {
+      refundId: String(json.id ?? store.nextId('re_pp')),
+      amount: request.amount,
+    };
+  }
+
+  /**
+   * PayPal Payouts is a separate, mass-payment product that requires its own
+   * approval and funding, and it does not support marketplace-style split
+   * settlement. Rather than pretend otherwise, this reports the payout as
+   * `processing` and the escrow service records it — the operational path is to
+   * settle sellers through the platform's own payout rail (see Paystack
+   * transfers for NGN, or Stripe Connect for USD/GBP/CAD).
+   */
+  async payout(request: PayoutRequest) {
+    return { payoutId: store.nextId('po_pp'), amount: request.amount, status: 'processing' as const };
+  }
+}
+
 /* ── Registry ───────────────────────────────────────────────────────────── */
 
-const providers: PaymentProvider[] = [new StripeProvider(), new PaystackProvider(), new SimulatedProvider()];
+const providers: PaymentProvider[] = [
+  new StripeProvider(),
+  new PayPalProvider(),
+  new PaystackProvider(),
+  new SimulatedProvider(),
+];
 
 export const providerRegistry = {
   all: () => providers,

@@ -190,7 +190,17 @@ void war;
 
 /* ── 8. Buyer's premium tiers ───────────────────────────────────────────── */
 section("8. Buyer’s premium tiers (§10)");
-const rolex = await api('/api/auctions/auc_rolex');
+
+/**
+ * The demo buyer (usr_you) holds the Pro entitlement, and Pro pricing applies on
+ * top of the disclosed category rate — so the standard 20%/15% disclosure is
+ * asserted as a NON-member, which is what a listing must show a bidder. The Pro
+ * discount is asserted separately below.
+ */
+const NON_PRO = 'usr_sofia';
+const asNonPro = (path) => api(path, { headers: { 'x-mm-user': NON_PRO } });
+
+const rolex = await asNonPro('/api/auctions/auc_rolex');
 const bd = rolex.json.breakdown;
 console.log(`  \u001b[2m${rolex.json.auction.title}\u001b[0m`);
 console.log(`  \u001b[2mhammer ${money(bd.hammerPrice, bd.currency)} + premium ${money(bd.buyersPremium, bd.currency)} (${(bd.buyersPremiumRate * 100).toFixed(0)}%) + ship ${bd.shipping} + tax ${bd.tax} = ${money(bd.total, bd.currency)}\u001b[0m`);
@@ -199,10 +209,29 @@ check('luxury category (watches) carries the 20% premium', Math.abs(bd.buyersPre
   `${(bd.buyersPremiumRate * 100).toFixed(0)}%`);
 check('total exceeds the hammer price', bd.total > bd.hammerPrice);
 
-const sneaker = await api('/api/auctions/auc_airmax');
+const sneaker = await asNonPro('/api/auctions/auc_airmax');
 check('standard category (sneakers) carries the 15% premium',
   Math.abs(sneaker.json.breakdown.buyersPremiumRate - 0.15) < 0.001,
   `${(sneaker.json.breakdown.buyersPremiumRate * 100).toFixed(0)}%`);
+
+/**
+ * A Pro member must pay the reduced rate on the very same lot: 20% → 15% for
+ * luxury, 15% → 10% for standard (§10). Without this the entitlement would be
+ * decorative — a member would pay full premium despite the membership.
+ */
+const proRolex = await api('/api/auctions/auc_rolex', { headers: { 'x-mm-user': 'usr_you' } });
+check('Pro member pays the reduced luxury premium (20% → 15%)',
+  Math.abs(proRolex.json.breakdown.buyersPremiumRate - 0.15) < 0.001,
+  `${(proRolex.json.breakdown.buyersPremiumRate * 100).toFixed(0)}%`);
+
+const proSneaker = await api('/api/auctions/auc_airmax', { headers: { 'x-mm-user': 'usr_you' } });
+check('Pro member pays the reduced standard premium (15% → 10%)',
+  Math.abs(proSneaker.json.breakdown.buyersPremiumRate - 0.1) < 0.001,
+  `${(proSneaker.json.breakdown.buyersPremiumRate * 100).toFixed(0)}%`);
+
+check('the Pro discount actually lowers the total',
+  proRolex.json.breakdown.total < rolex.json.breakdown.total,
+  `${money(proRolex.json.breakdown.total, bd.currency)} < ${money(rolex.json.breakdown.total, bd.currency)}`);
 
 /* ── 9. Stream item queue ───────────────────────────────────────────────── */
 section('9. Stream item queue (§4.1 step 4/6)');

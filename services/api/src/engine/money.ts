@@ -20,6 +20,23 @@ export function buyersPremiumRate(categoryId?: string, isPro = false): number {
   return luxury ? MONETIZATION.buyersPremiumLuxury : MONETIZATION.buyersPremiumStandard;
 }
 
+/**
+ * Apply the membership discount to a disclosed premium rate.
+ *
+ * A listing stores the STANDARD rate so the price a bidder sees is the price a
+ * non-member pays (§4.2 Step 5). That stored rate must not shadow the buyer's
+ * membership, or Pro would never receive the discount it is paying for. Both the
+ * quote and settlement run the disclosed rate through here, which keeps the two
+ * in step by construction.
+ */
+export function effectiveBuyersPremiumRate(disclosedRate: number, categoryId?: string, isPro = false): number {
+  if (!isPro) return disclosedRate;
+  const luxury = isLuxury(categoryId);
+  const proRate = luxury ? MONETIZATION.proBuyersPremiumLuxury : MONETIZATION.proBuyersPremiumStandard;
+  // A Pro rate is never worse than the standard rate it replaces.
+  return Math.min(disclosedRate, proRate);
+}
+
 /** §10 Cross-border fee — applied when buyer and seller sit in different countries. */
 export function crossBorderFee(amount: number, crossBorder: boolean): number {
   return crossBorder ? round2(amount * MONETIZATION.crossBorderFee) : 0;
@@ -94,7 +111,10 @@ export function costBreakdown(params: {
     includeShipping = true,
   } = params;
 
-  const rate = params.buyersPremiumRate ?? buyersPremiumRate(categoryId, isPro);
+  const rate =
+    params.buyersPremiumRate === undefined
+      ? buyersPremiumRate(categoryId, isPro)
+      : effectiveBuyersPremiumRate(params.buyersPremiumRate, categoryId, isPro);
   const buyersPremium = round2(hammerPrice * rate);
   const crossBorder = buyerCountry !== sellerCountry;
   const shipping = includeShipping
@@ -193,6 +213,7 @@ export function autoBidIncrements(currentBid: number) {
 }
 
 export const money = {
+  effectiveBuyersPremiumRate,
   isLuxury,
   buyersPremiumRate,
   crossBorderFee,

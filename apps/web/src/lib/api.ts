@@ -17,6 +17,7 @@ import type {
   Payout,
   PublicProfile,
   StreamWithRelations,
+  Subscription,
   User,
   PricePoint,
 } from '@moneymart/types';
@@ -280,6 +281,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ resolution }),
     }),
+  /** Membership and the pricing effect it has (RevenueCat entitlement). */
+  subscription: () =>
+    request<{
+      subscription: Subscription;
+      isPro: boolean;
+      entitlements: Record<string, string>;
+      revenueCatConfigured: boolean;
+      pricing: {
+        standardPremium: number;
+        luxuryPremium: number;
+        proStandardPremium: number;
+        proLuxuryPremium: number;
+      };
+    }>('/api/subscription'),
+  syncSubscription: () =>
+    request<{ ok: boolean; subscription: Subscription; isPro: boolean }>('/api/subscription/sync', { method: 'POST' }),
+
   paymentProviders: () =>
     request<{
       providers: { id: string; label: string; configured: boolean; supports: { currencies: string[]; countries: string[] } }[];

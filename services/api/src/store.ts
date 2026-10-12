@@ -19,6 +19,7 @@ import type {
   Order,
   Payout,
   Stream,
+  Subscription,
   User,
 } from '@moneymart/types';
 
@@ -49,6 +50,8 @@ export const db = {
   storefronts: new Map<string, Storefront>(),
   /** Escrow ledger, one record per order (§9.1 Payments Service). */
   escrow: new Map<string, EscrowRecord>(),
+  /** Membership entitlements, one per user, mirroring RevenueCat. */
+  subscriptions: new Map<string, Subscription>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
 };
@@ -62,6 +65,41 @@ export const users = {
   upsert: (user: User) => {
     db.users.set(user.id, user);
     return user;
+  },
+  /**
+   * Provision a minimal account.
+   *
+   * A RevenueCat webhook is often the FIRST contact the platform has with a
+   * buyer — the store confirms a purchase before the app has ever called us — so
+   * the entitlement cannot be stored against a user that does not exist. Real
+   * auth providers provision on first login for the same reason. The account is
+   * created unverified with a generated handle and no privileges, and the app
+   * completes it on first signed-in launch.
+   */
+  ensure: (id: string, hint?: { email?: string; countryCode?: string }): User => {
+    const existing = db.users.get(id);
+    if (existing) return existing;
+    const suffix = id.replace(/[^a-zA-Z0-9]/g, '').slice(-6).toLowerCase() || 'member';
+    const created: User = {
+      id,
+      email: hint?.email ?? `${suffix}@moneymart.demo`,
+      displayName: suffix.toUpperCase(),
+      handle: `mm_${suffix}`,
+      countryCode: hint?.countryCode ?? 'US',
+      currencyCode: 'USD',
+      role: 'buyer',
+      verificationStatus: 'unverified',
+      kycLevel: 0,
+      rating: 0,
+      totalSales: 0,
+      followersCount: 0,
+      followingCount: 0,
+      responseTimeMinutes: 0,
+      isPro: false,
+      createdAt: iso(),
+    };
+    db.users.set(id, created);
+    return created;
   },
   require: (id: string): User => {
     const user = db.users.get(id);
@@ -256,6 +294,23 @@ export const orderEscrow = {
       .reduce((sum, record) => sum + (record.heldAmount - record.releasedAmount - record.refundedAmount), 0),
 };
 
+/* ── Subscriptions (RevenueCat entitlements) ───────────── */
+
+export const subscriptions = {
+  all: () => [...db.subscriptions.values()],
+  get: (userId: string) => db.subscriptions.get(userId),
+  save: (subscription: Subscription) => {
+    db.subscriptions.set(subscription.userId, subscription);
+    return subscription;
+  },
+  remove: (userId: string) => db.subscriptions.delete(userId),
+  /** Memberships that are currently usable, grace period included. */
+  active: () =>
+    [...db.subscriptions.values()].filter(
+      (subscription) => subscription.isActive || subscription.status === 'grace_period',
+    ),
+};
+
 /* ── Storefronts (Studio) ──────────────────────────────── */
 export const storefronts = {
   all: () => [...db.storefronts.values()],
@@ -282,6 +337,7 @@ export const store = {
   priceHistory,
   storefronts,
   orderEscrow,
+  subscriptions,
 };
 
 export default store;

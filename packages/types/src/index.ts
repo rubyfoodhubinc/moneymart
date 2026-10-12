@@ -423,11 +423,38 @@ export type EscrowState =
 /** Which regional rail a payment used (§3.1 country matrix). */
 export type PaymentProviderId =
   | 'stripe'
+  | 'paypal'
   | 'paystack'
   | 'flutterwave'
   | 'interac'
   | 'mpesa'
   | 'simulated';
+
+/**
+ * Membership tiers, backed by RevenueCat entitlements.
+ *
+ * Deliberately separate from order payments: an order settles once through the
+ * escrow state machine, whereas a membership is a recurring entitlement that
+ * lives on the user and gates Pro pricing (10%/15% buyer's premium vs 15%/20%).
+ */
+export type SubscriptionTier = 'free' | 'pro' | 'elite';
+
+export type SubscriptionStatus = 'active' | 'trialing' | 'grace_period' | 'expired' | 'canceled';
+
+export interface Subscription {
+  userId: string;
+  tier: SubscriptionTier;
+  status: SubscriptionStatus;
+  /** Entitlement identifier as configured in RevenueCat. */
+  entitlement: string;
+  productIdentifier?: string;
+  store?: 'app_store' | 'play_store' | 'stripe' | 'promotional';
+  startedAt: string;
+  expiresAt?: string;
+  renewsAt?: string;
+  /** True while the membership is usable, including a grace period. */
+  isActive: boolean;
+}
 
 export type PaymentIntentStatus = 'requires_confirmation' | 'processing' | 'succeeded' | 'failed' | 'canceled';
 

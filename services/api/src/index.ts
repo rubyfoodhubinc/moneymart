@@ -28,6 +28,7 @@ import { escrow, EscrowError } from './engine/escrow.js';
 import { providerRegistry } from './engine/payments.js';
 import { qrToSvgDataUri } from './lib/qr.js';
 import { mountStaticHost } from './lib/staticHost.js';
+import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
 import {
   auctions,
   chat,
@@ -250,12 +251,37 @@ function broadcast(events: EngineEvent[]): void {
  * (§9.1 Auth Service); in dev the `x-mm-user` header or an explicit body field
  * selects the actor, which makes multi-user realtime flows testable.
  */
+/**
+ * Resolve the acting identity.
+ *
+ * `x-mm-user` stands in for a real session token until auth lands. A header is
+ * only honoured when it names a real user — an unknown identity must never be
+ * quietly downgraded to the session default, because that would serve one
+ * user's wallet, orders and pricing to a caller who merely claimed a different
+ * id. `identityGuard` rejects such requests before they reach a handler; this
+ * fallback exists only for requests that carry no header at all.
+ */
 function actorId(req: Request, explicit?: string): string {
-  const header = req.header('x-mm-user');
   if (explicit && users.get(explicit)) return explicit;
+  const header = req.header('x-mm-user');
   if (header && users.get(header)) return header;
   return store.db.session.userId;
 }
+
+/**
+ * Reject requests that assert an identity which does not exist.
+ *
+ * Applied globally rather than per route: authorisation must fail closed, and a
+ * per-route check is a standing invitation to forget one.
+ */
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const header = req.header('x-mm-user');
+  if (header && !users.get(header)) {
+    res.status(401).json({ error: 'unknown_identity', detail: `No user matches x-mm-user: ${header}` });
+    return;
+  }
+  next();
+});
 
 /* ── REST: health ──────────────────────────────────────────────────────── */
 
@@ -397,8 +423,11 @@ app.get('/api/auctions/:id', (req, res) => {
       hammerPrice: auction.currentBid || auction.startingPrice,
       currency: auction.currency,
       categoryId: auction.item.categoryId,
+      // The listing's disclosed standard rate; costBreakdown applies the
+      // viewer's membership discount through the same resolver settlement uses,
+      // so the quote cannot differ from the charge.
       buyersPremiumRate: auction.buyersPremiumRate,
-      isPro: Boolean(users.get(actorId(req))?.isPro),
+      isPro: subscriptionsService.isProUser(actorId(req)),
       buyerCountry: users.get(actorId(req))?.countryCode ?? 'US',
       sellerCountry: users.get(auction.sellerId)?.countryCode ?? 'US',
     }),
@@ -660,6 +689,127 @@ app.post('/api/orders/:id/status', (req, res) => {
   if (courierName) order.courierName = courierName;
   orders.save(order);
   res.json({ ok: true, order });
+});
+
+/* ── REST: subscriptions & entitlements (RevenueCat) ─────────────────────
+   Membership is a recurring entitlement on the user, distinct from an order
+   payment: it changes what the buyer PAYS (Pro premium 10%/15% vs 15%/20%)
+   rather than settling a single purchase.
+   ────────────────────────────────────────────────────────────────────────*/
+
+/** The signed-in user's membership, plus the pricing effect it has. */
+app.get('/api/subscription', async (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(404).json({ error: 'user_not_found' });
+    return;
+  }
+  const subscription = subscriptionsService.get(userId);
+  res.json({
+    subscription,
+    isPro: subscriptionsService.isProUser(userId),
+    entitlements: ENTITLEMENTS,
+    revenueCatConfigured: Boolean(process.env.REVENUECAT_SECRET_KEY),
+    /** What the membership is worth, so the client can show the saving. */
+    pricing: {
+      standardPremium: 15,
+      luxuryPremium: 20,
+      proStandardPremium: 10,
+      proLuxuryPremium: 15,
+    },
+  });
+});
+
+/** Ask RevenueCat to reconcile, for when a webhook was missed. */
+app.post('/api/subscription/sync', async (req, res) => {
+  const userId = actorId(req);
+  try {
+    const subscription = await subscriptionsService.syncFromRevenueCat(userId);
+    res.json({ ok: true, subscription, isPro: subscriptionsService.isProUser(userId) });
+  } catch (error) {
+    res.status(502).json({
+      error: 'revenuecat_unreachable',
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+/**
+ * RevenueCat webhook.
+ *
+ * RevenueCat supports a shared-secret authorization header; when
+ * REVENUECAT_WEBHOOK_SECRET is set it is required, so an unauthenticated caller
+ * cannot mint themselves a membership.
+ */
+app.post('/api/webhooks/revenuecat', (req, res) => {
+  const expected = process.env.REVENUECAT_WEBHOOK_SECRET;
+  if (expected) {
+    const provided = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+    if (provided !== expected) {
+      res.status(401).json({ error: 'invalid_webhook_signature' });
+      return;
+    }
+  }
+
+  const event = (req.body?.event ?? req.body) as Record<string, unknown>;
+  if (!event || typeof event !== 'object') {
+    res.status(400).json({ error: 'malformed_event' });
+    return;
+  }
+
+  // Sandbox events must not grant real entitlements in production.
+  if (!subscriptionsService.shouldApplyEvent(event)) {
+    res.json({ ok: true, applied: false, reason: 'sandbox_event_ignored' });
+    return;
+  }
+
+  const subscription = subscriptionsService.applyWebhookEvent(event);
+  if (!subscription) {
+    res.json({ ok: true, applied: false, reason: 'no_app_user_id' });
+    return;
+  }
+
+  notifications.create({
+    id: store.nextId('ntf'),
+    userId: subscription.userId,
+    category: 'system',
+    title: subscription.isActive ? 'Membership active' : 'Membership ended',
+    body: subscription.isActive
+      ? `Your ${subscription.tier} membership is active — Pro pricing applies to your bids.`
+      : 'Your membership is no longer active, so standard buyer\u2019s premium applies.',
+    href: '/account',
+    read: false,
+    createdAt: store.iso(),
+  });
+
+  res.json({ ok: true, applied: true, subscription });
+});
+
+/**
+ * Dev-only entitlement grant.
+ *
+ * Present so the Pro pricing path is exercisable without store credentials.
+ * Refused outright in production, because it would otherwise be a free
+ * membership endpoint.
+ */
+app.post('/api/dev/subscription', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    res.status(403).json({ error: 'dev_controls_disabled' });
+    return;
+  }
+  const { userId, tier = 'pro', days = 30 } = req.body as {
+    userId?: string;
+    tier?: 'free' | 'pro' | 'elite';
+    days?: number;
+  };
+  const target = userId ?? actorId(req);
+  if (!users.get(target)) {
+    res.status(404).json({ error: 'user_not_found' });
+    return;
+  }
+  const subscription = subscriptionsService.grant(target, tier, Number(days) || 30);
+  res.json({ ok: true, subscription, isPro: subscriptionsService.isProUser(target) });
 });
 
 /* ── REST: TV / IPTV (§7.3 QR bridge, §7.4 EPG + HbbTV) ──────────────────

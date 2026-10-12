@@ -20,6 +20,7 @@ import type {
   ServerToClientEvents,
   Storefront,
   StreamWithRelations,
+  Subscription,
   User,
 } from '@moneymart/types';
 
@@ -114,6 +115,23 @@ export const api = {
     request<{ ok: boolean }>(`/api/auctions/${id}/auto-bid`, { method: 'POST', body: JSON.stringify(body) }),
   createListing: (body: Record<string, unknown>) =>
     request<{ auction: AuctionWithRelations }>('/api/auctions', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Membership and its pricing effect (RevenueCat entitlement). */
+  subscription: () =>
+    request<{
+      subscription: Subscription;
+      isPro: boolean;
+      entitlements: Record<string, string>;
+      revenueCatConfigured: boolean;
+      pricing: {
+        standardPremium: number;
+        luxuryPremium: number;
+        proStandardPremium: number;
+        proLuxuryPremium: number;
+      };
+    }>('/api/subscription'),
+  syncSubscription: () =>
+    request<{ ok: boolean; subscription: Subscription; isPro: boolean }>('/api/subscription/sync', { method: 'POST' }),
 
   /**
    * Redeem a TV handoff token (§7.3).

@@ -22,6 +22,7 @@ import type {
 import { ANTI_SNIPE } from '@moneymart/tokens';
 import { money } from './money.js';
 import { openEscrow } from './escrow.js';
+import { isProUser } from './subscriptions.js';
 import { auctions, autoBids, items, notifications, orders, streams, store, users } from '../store.js';
 
 export type EngineEvent =
@@ -403,14 +404,23 @@ export function settleAuction(auctionId: string): EngineEvent[] {
   const winnerId = winning.bidderId;
   const buyer = users.get(winnerId);
   const seller = users.get(auction.sellerId);
-  // The rate disclosed on the listing is the rate that settles (§10, §4.2 Step 5):
-  // auctions store their category-aware premium (20% luxury) at creation time.
-  const rate = auction.buyersPremiumRate;
+  // Lots and auctions live in separate maps in the store, so the category —
+  // which decides whether the luxury rate applies — comes from the item.
+  const lot = items.get(auction.itemId);
+  /**
+   * The listing discloses the STANDARD category rate (20% for luxury), which is
+   * what §4.2 Step 5 requires a bidder to see. Settlement then applies the
+   * winner's membership discount on top, so the charge matches what that buyer's
+   * quote showed — a Pro member pays 15% on the same lot. Both paths run the
+   * disclosed rate through effectiveBuyersPremiumRate, so they cannot diverge.
+   */
+  const winnerIsPro = isProUser(winnerId);
+  const rate = money.effectiveBuyersPremiumRate(auction.buyersPremiumRate, lot?.categoryId, winnerIsPro);
   const breakdown = money.costBreakdown({
     hammerPrice,
     currency: auction.currency,
     buyersPremiumRate: rate,
-    isPro: Boolean(buyer?.isPro),
+    isPro: winnerIsPro,
     buyerCountry: buyer?.countryCode ?? 'US',
     sellerCountry: seller?.countryCode ?? 'US',
   });
