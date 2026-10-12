@@ -12,8 +12,13 @@
  *
  * Usage: node scripts/verify-tv.mjs [--api ...] [--tv http://127.0.0.1:3200]
  */
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import jsQR from 'jsqr';
 import { encodeQr } from '../services/api/src/lib/qr.ts';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -289,6 +294,180 @@ focusSource.includes('10009') && focusSource.includes('461')
 focusSource.includes('AXIS_WEIGHT')
   ? ok('navigation uses spatial scoring, not DOM tab order')
   : bad('navigation uses spatial scoring, not DOM tab order');
+
+/* ── 7. Real D-pad traversal ───────────────────────────────────────────── */
+
+/**
+ * Everything above reads SOURCE. None of it presses a key.
+ *
+ * That is how three defects survived: two elements claiming focus at once when
+ * the same lot appeared in two rows, focus moving to cards the viewer could not
+ * see because nothing scrolled, and a scroll that settled with the focus ring
+ * 8px past the fold. All three are invisible to a grep and obvious to a key press.
+ */
+section('7. Real D-pad traversal in a browser');
+
+const chromePath = [
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+].find((candidate) => existsSync(candidate));
+
+if (!chromePath) {
+  console.log('  \u001b[33m·\u001b[0m no Chromium binary — D-pad traversal not verified in this run');
+} else {
+  const { spawn } = await import('node:child_process');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const cdpPort = Number(process.env.MM_TV_CDP_PORT ?? 9399);
+  const profile = mkdtempSync(path.join(tmpdir(), 'mm-tv-dpad-'));
+
+  const browser = spawn(
+    chromePath,
+    ['--headless=new', '--disable-gpu', '--no-first-run', `--remote-debugging-port=${cdpPort}`,
+     `--user-data-dir=${profile}`, '--window-size=1920,1080', 'about:blank'],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+
+  let socket = null;
+  let messageId = 0;
+  const waiting = new Map();
+  const sendCommand = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      const id = ++messageId;
+      waiting.set(id, { resolve, reject });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+
+  for (let attempt = 0; attempt < 60 && !socket; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    try {
+      const targets = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json();
+      const page = targets.find((target) => target.type === 'page');
+      if (page?.webSocketDebuggerUrl) {
+        socket = new WebSocket(page.webSocketDebuggerUrl);
+        await new Promise((resolve) => socket.addEventListener('open', resolve, { once: true }));
+        socket.addEventListener('message', (event) => {
+          const data = JSON.parse(String(event.data));
+          if (data.id && waiting.has(data.id)) {
+            const { resolve, reject } = waiting.get(data.id);
+            waiting.delete(data.id);
+            data.error ? reject(new Error(data.error.message)) : resolve(data.result);
+          }
+        });
+        await sendCommand('Runtime.enable');
+        await sendCommand('Page.enable');
+        // A 10-foot viewport, which is the only size these rules are about.
+        await sendCommand('Emulation.setDeviceMetricsOverride', {
+          width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false,
+        });
+      }
+    } catch {
+      /* not listening yet */
+    }
+  }
+
+  const evaluate = async (expression) => {
+    const result = await sendCommand('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? 'eval failed');
+    return result.result?.value;
+  };
+
+  const CODES = { ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Enter: 13 };
+  const press = async (key) => {
+    for (const type of ['keyDown', 'keyUp']) {
+      await sendCommand('Input.dispatchKeyEvent', {
+        type, key, code: key,
+        windowsVirtualKeyCode: CODES[key], nativeVirtualKeyCode: CODES[key],
+      });
+    }
+    // Long enough for layout and any scroll to settle; a real remote repeats
+    // faster than this, which is exactly why the scroll must be instant.
+    await new Promise((resolve) => setTimeout(resolve, 900));
+  };
+
+  /** The single focused element, its geometry, and the scroll that got it there. */
+  const focusState = () => evaluate(`(() => {
+    const selected = document.querySelectorAll('[aria-selected="true"]');
+    const root = document.getElementById('root');
+    const el = document.activeElement;
+    const rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    return JSON.stringify({
+      selectedCount: selected.length,
+      activeLabel: el ? (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 24) : null,
+      isFocusable: el ? el.classList.contains('tv-focusable') : false,
+      top: rect ? Math.round(rect.top) : null,
+      bottom: rect ? Math.round(rect.bottom) : null,
+      fullyVisible: rect ? rect.top >= 0 && rect.bottom <= window.innerHeight : false,
+      rootScroll: root ? Math.round(root.scrollTop) : null,
+    });
+  })()`);
+
+  if (!socket) {
+    bad('a browser attached for D-pad traversal');
+  } else {
+    await sendCommand('Page.navigate', { url: `${TV}/` });
+    await new Promise((resolve) => setTimeout(resolve, 4500));
+
+    const initial = JSON.parse(await focusState());
+    initial.selectedCount === 1
+      ? ok('exactly one element holds focus at rest', initial.activeLabel ?? '')
+      : bad('exactly one element holds focus at rest', `${initial.selectedCount} selected`);
+    initial.isFocusable
+      ? ok('focus starts on a focusable card')
+      : bad('focus starts on a focusable card', String(initial.activeLabel));
+
+    /**
+     * Traverse every direction and require that each step both MOVES focus and
+     * leaves it fully on screen. The second half is what was broken.
+     */
+    const sequence = ['ArrowDown', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'ArrowLeft'];
+    let moved = 0;
+    let visible = 0;
+    let single = 0;
+    const offscreen = [];
+
+    for (const key of sequence) {
+      const before = JSON.parse(await focusState());
+      await press(key);
+      const after = JSON.parse(await focusState());
+
+      if (after.activeLabel && after.activeLabel !== before.activeLabel) moved += 1;
+      if (after.fullyVisible) visible += 1;
+      else offscreen.push(`${key}→y${after.top}..${after.bottom}`);
+      if (after.selectedCount === 1) single += 1;
+    }
+
+    moved === sequence.length
+      ? ok('every D-pad press moves focus', `${moved}/${sequence.length}`)
+      : bad('every D-pad press moves focus', `${moved}/${sequence.length}`);
+
+    /**
+     * A focused card must be fully visible. Before the fix, focus reached cards
+     * at negative y offsets and at 8px past the fold — a ring on something the
+     * viewer cannot read.
+     */
+    visible === sequence.length
+      ? ok('every focused card is fully on screen', `${visible}/${sequence.length}`)
+      : bad('every focused card is fully on screen', offscreen.join(' '));
+
+    single === sequence.length
+      ? ok('focus never lands on two elements at once')
+      : bad('focus never lands on two elements at once', `${single}/${sequence.length} single`);
+
+    const afterNav = JSON.parse(await focusState());
+    afterNav.rootScroll > 0 || afterNav.fullyVisible
+      ? ok('the content scrolled to follow focus', `scrollTop ${afterNav.rootScroll}`)
+      : bad('the content scrolled to follow focus', String(afterNav.rootScroll));
+  }
+
+  try {
+    browser.kill('SIGKILL');
+  } catch {
+    /* already dead */
+  }
+}
 
 /* ── Summary ───────────────────────────────────────────────────────────── */
 console.log('\n\u001b[1m═══════════════════════════════════════════════════════\u001b[0m');

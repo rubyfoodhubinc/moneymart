@@ -111,6 +111,7 @@ export function TvHomeScreen({
             <TvRow title="Ending Soon" subtitle="Closing within the hour — scan to bid from your phone">
               {ending.map((auction) => (
                 <TvAuctionCard
+                  row="ending-soon"
                   key={auction.id}
                   auction={auction}
                   group="home"
@@ -122,20 +123,20 @@ export function TvHomeScreen({
 
           <TvRow title="Top Creators Live Now" subtitle={`${live.length} rooms streaming`}>
             {live.map((stream) => (
-              <TvStreamCard key={stream.id} stream={stream} group="home" onSelect={() => onOpenStream(stream.id)} />
+              <TvStreamCard key={stream.id} stream={stream} group="home" row="top-creators-live-now" onSelect={() => onOpenStream(stream.id)} />
             ))}
           </TvRow>
 
           <TvRow title="Just Added" subtitle="Fresh lots across every category">
             {fresh.map((auction) => (
-              <TvAuctionCard key={auction.id} auction={auction} group="home" onSelect={() => onOpenAuction(auction.id)} />
+              <TvAuctionCard key={auction.id} auction={auction} group="home" row="just-added" onSelect={() => onOpenAuction(auction.id)} />
             ))}
           </TvRow>
 
           {sold.length ? (
             <TvRow title="Recently Sold" subtitle="Completed results feed the category price history">
               {sold.map((auction) => (
-                <TvAuctionCard key={auction.id} auction={auction} group="home" onSelect={() => onOpenAuction(auction.id)} />
+                <TvAuctionCard key={auction.id} auction={auction} group="home" row="recently-sold" onSelect={() => onOpenAuction(auction.id)} />
               ))}
             </TvRow>
           ) : null}

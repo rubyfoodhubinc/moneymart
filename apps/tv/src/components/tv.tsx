@@ -127,16 +127,25 @@ export function TvRow({
 export function TvStreamCard({
   stream,
   group,
+  row,
   onSelect,
   width = '30rem',
 }: {
   stream: StreamWithRelations;
   group?: string;
+  /** Distinguishes this instance from the same room rendered in another row. */
+  row?: string;
   onSelect: () => void;
   width?: string;
 }) {
   const isLive = stream.status === 'live';
-  const { ref, focused, focusProps } = useFocusable({ id: `stream-${stream.id}`, group, onSelect });
+  // Row-scoped for the same reason as the auction card: a live room can be
+  // featured in more than one row.
+  const { ref, focused, focusProps } = useFocusable({
+    id: `stream-${row ? `${row}-` : ''}${stream.id}`,
+    group,
+    onSelect,
+  });
 
   return (
     <article
@@ -204,13 +213,28 @@ export function TvAuctionCard({
   group,
   onSelect,
   width = '28rem',
+  row,
 }: {
   auction: AuctionWithRelations;
   group?: string;
+  /** Distinguishes this instance from the same lot rendered in another row. */
+  row?: string;
   onSelect: () => void;
   width?: string;
 }) {
-  const { ref, focused, focusProps } = useFocusable({ id: `auction-${auction.id}`, group, onSelect });
+  /**
+   * The focus id is scoped to the ROW, not just the auction.
+   *
+   * The same lot legitimately appears in more than one row ("Ending Soon" and
+   * "Just Added"), and an id derived from the auction alone then names two DOM
+   * elements. The engine keys by id, so one silently replaced the other and both
+   * rendered a focus ring. `row` makes the id unique to this instance.
+   */
+  const { ref, focused, focusProps } = useFocusable({
+    id: `auction-${row ? `${row}-` : ''}${auction.id}`,
+    group,
+    onSelect,
+  });
 
   return (
     <article

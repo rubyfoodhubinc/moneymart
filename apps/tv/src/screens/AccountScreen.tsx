@@ -107,7 +107,7 @@ export function TvAccountScreen({ onOpenAuction }: { onOpenAuction: (id: string)
         watchlistLots.length ? (
           <TvRow title="Watchlist" subtitle="Saved lots with live countdowns">
             {watchlistLots.map((auction) => (
-              <TvAuctionCard key={auction.id} auction={auction} group="account" onSelect={() => onOpenAuction(auction.id)} />
+              <TvAuctionCard key={auction.id} auction={auction} group="account" row="watchlist" onSelect={() => onOpenAuction(auction.id)} />
             ))}
           </TvRow>
         ) : (
@@ -121,7 +121,7 @@ export function TvAccountScreen({ onOpenAuction }: { onOpenAuction: (id: string)
         historyLots.length ? (
           <TvRow title="Watch History" subtitle="Lots you opened in the last 30 days">
             {historyLots.map((auction) => (
-              <TvAuctionCard key={auction.id} auction={auction} group="account" onSelect={() => onOpenAuction(auction.id)} />
+              <TvAuctionCard key={auction.id} auction={auction} group="account" row="watch-history" onSelect={() => onOpenAuction(auction.id)} />
             ))}
           </TvRow>
         ) : (

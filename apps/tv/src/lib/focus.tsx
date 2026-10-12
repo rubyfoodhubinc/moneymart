@@ -138,6 +138,8 @@ function score(from: Rect, to: Rect, direction: Direction): number | null {
 export function FocusProvider({ children }: { children: ReactNode }) {
   const entries = useRef(new Map<string, FocusableEntry>());
   const [activeId, setActiveId] = useState<string | null>(null);
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = activeId;
   const [activeGroup, setActiveGroupState] = useState<string | null>(null);
   const activeGroupRef = useRef<string | null>(null);
 
@@ -158,8 +160,33 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     const entry = entries.current.get(id);
     if (!entry) return;
     setActiveId(id);
+    /**
+     * `preventScroll: false` so the browser's own minimal scroll runs as a
+     * fallback, then `scrollIntoView` refines it with `block: 'nearest'` so a
+     * card already fully visible is not needlessly re-centred. Both are needed:
+     * on a TV the socket that carries focus is a raw key event, so nothing scrolls
+     * the element into view unless we do.
+     */
     entry.element.focus({ preventScroll: false });
-    entry.element.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+
+    /**
+     * Scroll deterministically, not smoothly.
+     *
+     * `focus({ preventScroll: false })` and a `behavior: 'smooth'` call both
+     * start animations, and the second interrupts the first — measured on a
+     * 1080p viewport, the focused card settled with its bottom 8px below the
+     * fold, so a viewer saw a focus ring on a card they could not fully read.
+     * An instant scroll settles before the next key press, which is also what a
+     * D-pad needs: a remote produces key events faster than a scroll animation
+     * completes, and interrupted animations are exactly how focus and visibility
+     * drift apart.
+     */
+    const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    entry.element.scrollIntoView({
+      behavior: reduceMotion ? 'auto' : 'auto',
+      block: 'nearest',
+      inline: 'center',
+    });
     entry.onFocus?.();
   }, []);
 
@@ -212,14 +239,61 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     entries.current.get(activeId)?.onSelect?.();
   }, [activeId]);
 
+  /**
+   * Ids of elements whose registration was overwritten by a DUPLICATE id.
+   *
+   * A map keyed by id silently replaces the earlier element, and because
+   * `focused` is derived from `activeId === id`, BOTH elements then render as
+   * focused — two gold rings at once, and `element.focus()` only ever reaches
+   * whichever one registered last. This happened whenever the same auction
+   * appeared in two rows of the same screen, which is the normal case for a home
+   * screen with "Ending Soon" and "Just Added".
+   *
+   * The duplicate is kept in the map (so the last writer still works) but
+   * recorded, so the condition is visible instead of flickering quietly.
+   */
+  const duplicateIds = useRef(new Set<string>());
+
   const register = useCallback((entry: FocusableEntry) => {
+    const previous = entries.current.get(entry.id);
+    if (previous && previous.element !== entry.element) {
+      duplicateIds.current.add(entry.id);
+      /**
+       * Louder in development, where the cause is a missing row scope in a card
+       * id. Silent in production, but still tracked.
+       */
+      if (typeof console !== 'undefined' && process.env.NODE_ENV !== 'production') {
+        console.warn(
+          `[tv-focus] duplicate focus id "${entry.id}" — two elements share it, so both ` +
+            'will render as focused and only one is reachable. Give the card a row-scoped id.',
+        );
+      }
+    } else if (previous) {
+      duplicateIds.current.delete(entry.id);
+    }
     entries.current.set(entry.id, entry);
     // First element to appear becomes focus, so a screen is never unfocused.
     setActiveId((current) => current ?? entry.id);
   }, []);
 
+  /** Exposed for the verification suite: ids that two elements both claimed. */
+  const focusDebug = useCallback(
+    () => ({
+      activeId: activeIdRef.current,
+      registered: entries.current.size,
+      duplicates: [...duplicateIds.current],
+    }),
+    [],
+  );
+
   const unregister = useCallback((id: string) => {
+    /**
+     * Only the element that actually owns the map slot may remove it. An
+     * overwritten (duplicate) element unmounting must not delete the survivor's
+     * entry and leave the row unreachable.
+     */
     entries.current.delete(id);
+    duplicateIds.current.delete(id);
     setActiveId((current) => (current === id ? null : current));
   }, []);
 

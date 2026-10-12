@@ -34,7 +34,16 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
-  overflow: hidden; /* TV apps never scroll the page; rows scroll internally. */
+  /**
+   * The page itself must not scroll — but the content INSIDE #root must, or a
+   * focused row below the fold can never be brought into view. `overflow: hidden`
+   * here plus `height: 100%` on the screen meant exactly that: pressing Down moved
+   * focus to an element at a negative y offset, off-screen, permanently.
+   *
+   * The scroll happens in #root, so the chrome around it stays put and nothing
+   * scrolls by accident on a screen that fits.
+   */
+  overflow: hidden;
   background: var(--mm-navy-deep);
   color: #fff;
   font-family: var(--mm-font-body);
@@ -44,6 +53,28 @@ body {
 
 #root {
   height: 100%;
+  /**
+   * The one scrollable axis the D-pad needs.
+   *
+   * `scrollIntoView({ block: 'nearest' })` walks up to the nearest scrollable
+   * ancestor; with nothing scrollable in the vertical axis it silently does
+   * nothing, which is how "focus works" and "you can see what is focused" came
+   * apart. `scrollbar-width: none` keeps a 10-foot UI free of browser furniture.
+   */
+  overflow-y: auto;
+  overflow-x: hidden;
+  /**
+   * No CSS `scroll-behavior: smooth` here.
+   *
+   * The engine calls `scrollIntoView` itself, and a CSS-smooth scrollport
+   * competes with it: the request is honoured with an animation that a rapid
+   * D-pad key press interrupts, so focus and visibility drift apart. A remote
+   * emits keys faster than a scroll finishes, so the scroll must settle at once.
+   */
+  scrollbar-width: none;
+}
+#root::-webkit-scrollbar {
+  display: none;
 }
 
 /* TV browsers draw their own focus ring inconsistently — we own it entirely. */
@@ -55,7 +86,14 @@ body {
 }
 
 .tv-screen {
-  height: 100%;
+  /**
+   * `min-height`, not `height`.
+   *
+   * A fixed height clipped the rows to one screenful with no way to reach the
+   * rest. min-height keeps a short screen filling the viewport while letting a
+   * long one grow so #root can scroll to whatever holds focus.
+   */
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   padding: var(--tv-overscan);
@@ -177,8 +215,19 @@ body {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 0.5rem 0.25rem 1.5rem;
-  scroll-behavior: smooth;
   scrollbar-width: none;
+}
+
+/**
+ * Keep a focused card clear of the viewport edge.
+ *
+ * Without this, `scrollIntoView({ block: 'nearest' })` is satisfied by a card
+ * whose last few pixels sit just past the fold — measured at 8px — so the focus
+ * ring is technically visible while the price and title underneath it are not.
+ * The margin reserves room for the ring and its offset.
+ */
+.tv-focusable {
+  scroll-margin: 1.25rem 0 1.75rem;
 }
 .tv-row__track::-webkit-scrollbar {
   display: none;
