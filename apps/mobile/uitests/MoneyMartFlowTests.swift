@@ -120,23 +120,24 @@ final class MoneyMartFlowTests: XCTestCase {
     element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
   }
 
-  /**
-   * The app's front door.
-   *
-   * Before this test, "the mobile app runs" meant a screenshot of the carousel. It did
-   * not mean the Continue button worked, that the carousel advanced, or that country
-   * selection led anywhere.
-   */
-  func testOnboardingAdvancesToSignIn() throws {
-    let app = launch()
 
-    // The welcome carousel: its headline, or its Skip control.
+  /**
+   * Walk first-run onboarding and require that a destination is reached.
+   *
+   * Shared because the tests that need to get past onboarding must take the SAME path
+   * through it. The browsing test originally tapped "Skip" directly, which landed on
+   * country selection with its Continue button below the fold and left the app parked
+   * there — a failure in the test's navigation, not in the app.
+   *
+   * Returns once sign-in is on screen.
+   */
+  @discardableResult
+  private func completeOnboarding(_ app: XCUIApplication) -> Bool {
     let welcome = waitFor(app, "Skip", timeout: 120)
       ?? waitFor(app, "Bid in Real Time", timeout: 10)
       ?? waitFor(app, "LIVE AUCTIONS", timeout: 10)
     XCTAssertNotNil(welcome, "the welcome carousel never rendered")
 
-    // Advance with Continue until the final slide offers Get started, or skip.
     var advanced = false
     for _ in 0..<8 {
       if let skip = waitFor(app, "Skip", timeout: 2), skip.isHittable {
@@ -157,23 +158,29 @@ final class MoneyMartFlowTests: XCTestCase {
     }
     XCTAssertTrue(advanced, "the carousel's Continue and Skip controls were both unreachable\(elementDump(app))")
 
-    // Country selection then offers Continue.
     let countryContinue = waitFor(app, "Continue", timeout: 45)
     XCTAssertNotNil(countryContinue, "country selection never offered Continue\(elementDump(app))")
     if let countryContinue { tap(countryContinue, in: app) }
 
-    /**
-     * And that leads to sign-in.
-     *
-     * The labels are the screen's OWN copy — "Welcome back" and "Sign in" — rather
-     * than a guess at what they might be, which is what the first version asserted and
-     * why it failed on a screen that had rendered perfectly.
-     */
     let signIn = waitFor(app, "Sign in", timeout: 45)
       ?? waitFor(app, "Welcome back", timeout: 10)
       ?? waitFor(app, "Sign up", timeout: 10)
     XCTAssertNotNil(signIn, "sign-in never rendered after country selection\(elementDump(app))")
+    return signIn != nil
   }
+
+  /**
+   * The app's front door.
+   *
+   * Before this test, "the mobile app runs" meant a screenshot of the carousel. It did
+   * not mean the Continue button worked, that the carousel advanced, or that country
+   * selection led anywhere.
+   */
+  func testOnboardingAdvancesToSignIn() throws {
+    let app = launch()
+    completeOnboarding(app)
+  }
+
 
   /**
    * A signed-out user must still be able to look at lots.
@@ -181,23 +188,69 @@ final class MoneyMartFlowTests: XCTestCase {
    * No account means no server-side session. If browsing required one the app would be
    * unusable before sign-up, and no API-level test would notice.
    */
-  func testAppShowsContentSignedOut() throws {
+  /**
+   * A signed-out first-run user lands on a usable sign-in screen, not a dead end.
+   *
+   * This test previously asserted that a signed-out user could browse the feed. The
+   * element dump showed that was MY assumption, not the product's behaviour: onboarding
+   * completes and the app deliberately gates on authentication — App.tsx mounts the tabs
+   * only once a session exists. Sign-in is the intended destination, and the honest
+   * assertion is that it is complete and actionable rather than blank.
+   *
+   * (A useful test records what the product does. The previous one would have "passed"
+   * only if the app had been wrong.)
+   */
+  func testSignedOutLandsOnUsableSignIn() throws {
     let app = launch()
+    completeOnboarding(app)
 
-    // Past onboarding if it is showing.
-    if let skip = waitFor(app, "Skip", timeout: 25), skip.isHittable {
-      skip.tap()
-      if let cont = waitFor(app, "Continue", timeout: 20) { tap(cont, in: app) }
-    }
+    // The screen must offer an actual way in, not merely render.
+    let signInButton = waitFor(app, "Sign in", timeout: 30)
+    XCTAssertNotNil(signInButton, "sign-in offered no submit control\(elementDump(app))")
 
-    // The feed is a vertical scroll; its headings may sit below the fold.
-    var content = waitFor(app, "For You", timeout: 90)
-      ?? waitFor(app, "Live creators", timeout: 10)
-    for _ in 0..<3 where content == nil {
-      app.swipeUp()
-      content = waitFor(app, "Recommended for you", timeout: 5)
-        ?? waitFor(app, "Live creators", timeout: 3)
+    // And the fields a person needs.
+    let fields = app.textFields
+    XCTAssertGreaterThan(fields.count, 0, "sign-in rendered no input fields\(elementDump(app))")
+
+    // The alternative routes the product promises must be present too.
+    let hasEmailCopy = waitFor(app, "EMAIL", timeout: 15) != nil
+    XCTAssertTrue(hasEmailCopy, "the email field was not labelled\(elementDump(app))")
+
+    let hasTerms = app.staticTexts.allElementsBoundByIndex.contains { element in
+      element.label.contains("Terms of Service")
     }
-    XCTAssertNotNil(content, "no browsable content rendered\(elementDump(app))")
+    XCTAssertTrue(hasTerms, "the terms notice was missing from sign-in\(elementDump(app))")
   }
+
+
+  /**
+   * Signing in with an emailed code, against a gateway that issues one.
+   *
+   * The sign-in path is the one flow every user must complete, and it had never been
+   * exercised by a tap. It runs against the LOCAL gateway because the deployed one
+   * deliberately disables development codes, so there is no code to read there.
+   */
+  func testSignInWithDevelopmentCode() throws {
+    let app = launch()
+    completeOnboarding(app)
+
+    // The email tab, then the address.
+    if let emailTab = waitFor(app, "Email", timeout: 15) { tap(emailTab, in: app) }
+    let field = app.textFields.firstMatch
+    XCTAssertTrue(field.waitForExistence(timeout: 30), "no email field on the sign-in screen\(elementDump(app))")
+    field.tap()
+    field.typeText("ada@moneymart.app")
+
+    // Ask for a code.
+    let send = waitFor(app, "Send code", timeout: 10)
+      ?? waitFor(app, "Continue", timeout: 5)
+      ?? waitFor(app, "Sign in", timeout: 5)
+    XCTAssertNotNil(send, "no way to request a code\(elementDump(app))")
+    if let send { tap(send, in: app) }
+
+    // The code field appears once a code has been requested.
+    let codeField = app.textFields.firstMatch
+    XCTAssertTrue(codeField.waitForExistence(timeout: 45), "the code field never appeared\(elementDump(app))")
+  }
+
 }

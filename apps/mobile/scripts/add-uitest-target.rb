@@ -25,10 +25,11 @@ raise "missing #{SOURCE_TEST}" unless File.exist?(SOURCE_TEST)
 
 project = Xcodeproj::Project.open(PROJECT)
 
-if project.targets.any? { |t| t.name == TARGET_NAME }
-  puts "  #{TARGET_NAME} already exists"
-  exit 0
-end
+# The build settings below are applied on EVERY run, including when the target already
+# exists. Returning early here is what broke a regeneration: `expo prebuild` recreated the
+# project without PRODUCT_NAME, and the test bundle then built as "-Runner.app/PlugIns/
+# .xctest" — two targets producing one nameless output.
+existing = project.targets.find { |t| t.name == TARGET_NAME }
 
 app = project.targets.find { |t| t.name == APP_NAME }
 raise "#{APP_NAME} target not found" unless app
@@ -46,7 +47,7 @@ FileUtils.cp(SOURCE_TEST, File.join(dir, 'MoneyMartFlowTests.swift'))
 
 
 # ── The target ────────────────────────────────────────────────────────────────
-test_target = project.new_target(:ui_test_bundle, TARGET_NAME, :ios, deployment_target)
+test_target = existing || project.new_target(:ui_test_bundle, TARGET_NAME, :ios, deployment_target)
 
 test_target.build_configurations.each do |config|
   config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = BUNDLE_ID
@@ -54,6 +55,12 @@ test_target.build_configurations.each do |config|
   config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = deployment_target
   config.build_settings['TEST_TARGET_NAME'] = APP_NAME
   config.build_settings['GENERATE_INFOPLIST_FILE'] = 'YES'
+  # A ui_test_bundle has no product name by default, so the build produces
+  # "-Runner.app/PlugIns/.xctest" and two targets claim the same nameless output:
+  #   error: Multiple commands produce '.../-Runner.app/PlugIns/.xctest'
+  # Setting it here rather than by hand is what makes the script idempotent.
+  config.build_settings['PRODUCT_NAME'] = TARGET_NAME
+  config.build_settings['PRODUCT_MODULE_NAME'] = TARGET_NAME
   # The runner is signed for the simulator like the app is.
   config.build_settings['CODE_SIGNING_ALLOWED'] = 'YES'
   config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
@@ -62,16 +69,19 @@ test_target.build_configurations.each do |config|
 end
 
 # The test bundle must be hosted by the app.
-test_target.add_dependency(app)
+test_target.add_dependency(app) unless test_target.dependencies.any? { |d| d.target == app }
 
 group = project.main_group.find_subpath(APP_NAME, true).find_subpath(TARGET_NAME, true)
 group.set_source_tree('SOURCE_ROOT')
 group.set_path(File.join(APP_NAME, TARGET_NAME))
-project.files.each { |f| f } # no-op, keeps the API happy on older versions
 
-file_ref = group.new_reference(File.join(APP_NAME, TARGET_NAME, 'MoneyMartFlowTests.swift'))
-file_ref.set_source_tree('SOURCE_ROOT')
-test_target.add_file_references([file_ref])
+# Add the Swift file only if the target does not already compile it.
+already = test_target.source_build_phase.files.any? { |f| f.display_name.to_s.include?('MoneyMartFlowTests') }
+unless already
+  file_ref = group.new_reference(File.join(APP_NAME, TARGET_NAME, 'MoneyMartFlowTests.swift'))
+  file_ref.set_source_tree('SOURCE_ROOT')
+  test_target.add_file_references([file_ref])
+end
 
 # ── The scheme, so `xcodebuild test -scheme` can find it ──────────────────────
 scheme = Xcodeproj::XCScheme.new
@@ -81,4 +91,4 @@ scheme.set_launch_target(app)
 scheme.save_as(PROJECT, TARGET_NAME, true)
 
 project.save
-puts "  created #{TARGET_NAME} with a shared #{TARGET_NAME} scheme"
+puts existing ? "  refreshed #{TARGET_NAME} settings" : "  created #{TARGET_NAME} with a shared #{TARGET_NAME} scheme"
