@@ -13,7 +13,9 @@
  * Usage: node scripts/verify-ui.mjs [--url http://127.0.0.1:3000] [--timeout 60000]
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const flagIndex = (name) => args.indexOf(name);
@@ -48,6 +50,7 @@ const CHROME_CANDIDATES = [
   '/usr/bin/google-chrome',
   '/usr/bin/chromium',
 ];
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const chromePath = CHROME_CANDIDATES.find((candidate) => existsSync(candidate));
 
 let pass = 0;
@@ -210,7 +213,47 @@ async function goto(pathname) {
 
 function finish() {
   clearTimeout(timer);
-  console.log('\n\u001b[1m═══════════════════════════════════════════════\u001b[0m');
+  /* ── A live room must never be described as ended ──────────────────────── */
+
+  /**
+   * The stream feed labelled live rooms "Stream ended".
+   *
+   * The fallback for a stream with no lot on the block knew only two states —
+   * `scheduled`, else "Stream ended" — so a room that is genuinely LIVE between lots
+   * was announced as over while its own badge said LIVE. Four of the five seeded
+   * rooms are in exactly that state, and the string existed in three files across two
+   * surfaces, which is why this is asserted on the sources rather than on one screen.
+   */
+  section('Stream status wording');
+
+  const streamCopyFiles = [
+    ['web', 'apps/web/src/components/auction.tsx'],
+    ['mobile', 'apps/mobile/src/components/auction.tsx'],
+  ];
+
+  let statusCopyChecked = 0;
+  for (const [surface, relative] of streamCopyFiles) {
+    const full = path.join(repoRoot, relative);
+    if (!existsSync(full)) continue;
+    const text = readFileSync(full, 'utf8');
+    statusCopyChecked += 1;
+
+    /**
+     * Every "Stream ended" must sit behind an explicit non-live check. The fixed
+     * shape tests `status === 'live'` first; the broken one tested `'scheduled'`
+     * first, so anything not scheduled was reported as ended.
+     */
+    const hasLiveBranch = /status === 'live'\s*\n?\s*\?\s*'Live now/.test(text) || /status === 'live'[\s\S]{0,40}Live now/.test(text);
+    hasLiveBranch
+      ? ok(`${surface}: a live room is never described as ended`)
+      : bad(`${surface}: a live room is never described as ended`, 'no live branch before the ended fallback');
+  }
+
+  statusCopyChecked > 0
+    ? ok('both web and mobile stream feeds were checked', `${statusCopyChecked} files`)
+    : bad('both web and mobile stream feeds were checked', 'none found');
+
+console.log('\n\u001b[1m═══════════════════════════════════════════════\u001b[0m');
   const colour = fail === 0 ? '\u001b[32m' : '\u001b[31m';
   console.log(`  ${colour}PASSED ${pass}   FAILED ${fail}\u001b[0m`);
   if (fail) failures.forEach((entry) => console.log(`    \u001b[31m· ${entry}\u001b[0m`));

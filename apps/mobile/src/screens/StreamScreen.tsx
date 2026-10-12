@@ -47,6 +47,7 @@ import { CheckIcon, GavelIcon, SparkIcon, UsersIcon } from '@/components/icons';
 import { useAuctionRoom, useAutoBid, usePlaceBid, useStream, useStreamRoom, useWatchlist } from '@/lib/hooks';
 import { formatAge, formatMoney, formatViewers, minimumNextBid, pct } from '@/lib/format';
 import { colors, gradients } from '@/theme';
+import { HlsVideo } from '@/components/HlsVideo';
 import { useSession } from '@/store/session';
 
 const TABS = ['Bid', 'Chat', 'Queue'] as const;
@@ -130,10 +131,19 @@ export default function StreamScreen({ route, navigation }: { route: any; naviga
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       {/* ── Video area (top 70%) ──────────────────────────────────────── */}
       <View style={styles.video}>
-        <Image
-          source={{ uri: liveAuction?.item.images[0] ?? stream.posterUrl }}
-          style={styles.videoImage}
-          resizeMode="cover"
+        {/**
+          * Real HLS, using the source the server resolved — the same `playback`
+          * object web and TV consume. This previously rendered the lot's poster
+          * inside an `Image`, so on mobile the room could only ever show a still
+          * while the other surfaces played video.
+          *
+          * The poster is still the fallback: an offline or scheduled room resolves
+          * to no URL, and a manifest that fails to load falls back rather than
+          * showing a black rectangle.
+          */}
+        <HlsVideo
+          playback={stream.playback}
+          posterUrl={liveAuction?.item.images[0] ?? stream.posterUrl}
         />
         <LinearGradient colors={['rgba(7,15,24,0.6)', 'transparent', 'rgba(7,15,24,0.92)']} style={StyleSheet.absoluteFill} />
 

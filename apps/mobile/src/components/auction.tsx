@@ -216,9 +216,24 @@ export function StreamCard({
             </>
           ) : (
             <Body size={12} color={colors.ink3}>
-              {stream.status === 'scheduled'
-                ? `Starts ${new Date(stream.scheduledStartTime).toLocaleString()}`
-                : 'Stream ended'}
+              {/**
+               * No lot on the block.
+               *
+               * This knew only two states — `scheduled`, else "Stream ended" — so a
+               * room that is genuinely LIVE with nothing currently on the block was
+               * labelled "Stream ended" while the badge directly above it said LIVE.
+               * Four of the five seeded rooms are in exactly that state, so the app
+               * was telling users those rooms were over.
+               *
+               * A live room between lots is the normal state, and it is the most
+               * interesting thing on the screen; calling it ended is the opposite of
+               * the truth.
+               */}
+              {stream.status === 'live'
+                ? 'Live now — next lot coming up'
+                : stream.status === 'scheduled'
+                  ? `Starts ${new Date(stream.scheduledStartTime).toLocaleString()}`
+                  : 'Stream ended'}
             </Body>
           )}
         </View>

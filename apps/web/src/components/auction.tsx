@@ -221,9 +221,19 @@ export function StreamCard({
               </p>
             ) : (
               <p className="mt-2 text-[12px] text-white/45">
-                {stream.status === 'scheduled'
-                  ? `Starts ${new Date(stream.scheduledStartTime).toLocaleString()}`
-                  : 'Stream ended'}
+                {/**
+                 * A live room with nothing currently on the block.
+                 *
+                 * This knew only `scheduled`, else "Stream ended", so a room that is
+                 * genuinely live between lots was labelled ended while its own badge
+                 * said LIVE. Four of the five seeded rooms are in that state, so the
+                 * feed announced live rooms as over.
+                 */}
+                {stream.status === 'live'
+                  ? 'Live now — next lot coming up'
+                  : stream.status === 'scheduled'
+                    ? `Starts ${new Date(stream.scheduledStartTime).toLocaleString()}`
+                    : 'Stream ended'}
               </p>
             )}
           </div>
@@ -305,9 +315,12 @@ export function StreamCard({
             </>
           ) : (
             <p className="text-[12.5px] text-white/55">
-              {stream.status === 'scheduled'
-                ? `Starts ${new Date(stream.scheduledStartTime).toLocaleString()}`
-                : 'Stream ended'}
+              {/* A live room between lots is live, not ended. */}
+              {stream.status === 'live'
+                ? 'Live now — next lot coming up'
+                : stream.status === 'scheduled'
+                  ? `Starts ${new Date(stream.scheduledStartTime).toLocaleString()}`
+                  : 'Stream ended'}
             </p>
           )}
         </div>
