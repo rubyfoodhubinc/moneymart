@@ -9,7 +9,9 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import cors from 'cors';
 import { createServer } from 'node:http';
 import { createServer as createSecureServer } from 'node:https';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join, normalize, resolve as resolvePath } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Server as SocketServer } from 'socket.io';
 import type {
@@ -55,6 +57,116 @@ import { seed, reseed } from './seed.js';
 
 const PORT = Number(process.env.PORT ?? 4317);
 const app = express();
+/**
+ * ── HLS media ──────────────────────────────────────────────────────────────
+ *
+ * The stream room had nothing to play: every stream carried `hlsUrl: ""`, so the
+ * player could only show a poster over an offline notice. These are the real HLS
+ * playlists and MPEG-TS segments the room now plays, produced by
+ * `scripts/generate-hls.sh`.
+ *
+ * Segments are immutable once written, so they are cached for a year; playlists are
+ * re-read every minute so a future live playlist can advance. CORS is open because
+ * hls.js fetches segments with XHR from the web and TV origins, which are different
+ * from the API's.
+ */
+const MEDIA_ROOT = findMediaRoot();
+
+/**
+ * Locate the media directory.
+ *
+ * It sits at the package root, but this module's own path differs between the two
+ * ways it is loaded: `src/index.ts` under tsx, and
+ * `dist/services/api/src/index.js` after a build. Walking up a FIXED number of
+ * levels is right for one and silently wrong for the other — which is exactly what
+ * happened: the playlist route answered `stream_not_found` for media that was
+ * present on disk, because the path resolved to `dist/services/media`.
+ *
+ * Candidates are tried in order and the first that exists wins. The first candidate
+ * is returned when none match, so a missing directory fails in the route with a
+ * clear 404 rather than at import time.
+ */
+function findMediaRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolvePath(here, '../../../media'), // source under tsx: src -> services/api/media
+    resolvePath(here, '../../media'), // built: dist/services/api/src -> services/api/media
+    resolvePath(process.cwd(), 'media'),
+    resolvePath(process.cwd(), 'services/api/media'),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
+}
+
+/**
+ * Where this gateway is reachable, for building absolute media URLs.
+ *
+ * HLS clients fetch playlists over HTTP, so a relative path is not enough for every
+ * consumer. An explicit `MM_MEDIA_BASE_URL` wins; otherwise the managed platform's
+ * public domain is used. When neither is available the helper returns undefined and
+ * playback falls back to the public demo manifests, which is the honest outcome for
+ * a deployment that never generated the media.
+ */
+function mediaBaseUrl(): string | undefined {
+  const explicit = process.env.MM_MEDIA_BASE_URL?.trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+  const domain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+  if (domain) return `https://${domain.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
+  // Local development: the gateway is reachable on its own port.
+  if (existsSync(join(MEDIA_ROOT, 'hls'))) return `http://127.0.0.1:${PORT}`;
+  return undefined;
+}
+
+const STREAM_NAME = /^[a-z0-9][a-z0-9-]{0,40}$/;
+
+app.get('/media/hls/:name/index.m3u8', (req, res) => {
+  const name = String(req.params.name);
+  if (!STREAM_NAME.test(name)) {
+    res.status(400).json({ error: 'invalid_stream_name' });
+    return;
+  }
+  try {
+    // Relative segment URIs in the playlist resolve against the playlist URL, which
+    // is the behaviour we want.
+    const playlist = readFileSync(join(MEDIA_ROOT, 'hls', name, 'index.m3u8'), 'utf8');
+    res.type('application/vnd.apple.mpegurl');
+    res.setHeader('Cache-Control', 'public, max-age=60');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(playlist);
+  } catch {
+    res.status(404).json({ error: 'stream_not_found', detail: `No stream named ${name}.` });
+  }
+});
+
+app.get('/media/hls/:name/:segment', (req, res) => {
+  const name = String(req.params.name);
+  const segment = String(req.params.segment);
+  if (!STREAM_NAME.test(name) || !/^seg\d{3}\.ts$/.test(segment)) {
+    res.status(400).json({ error: 'invalid_segment' });
+    return;
+  }
+  /**
+   * Resolved, then checked for containment. The pattern above already forbids
+   * separators and traversal, but asserting containment means a future loosening of
+   * that pattern cannot silently become a directory escape.
+   */
+  const base = join(MEDIA_ROOT, 'hls');
+  const target = normalize(join(base, name, segment));
+  if (target !== join(base, name, segment) || !target.startsWith(base + '/')) {
+    res.status(400).json({ error: 'invalid_segment' });
+    return;
+  }
+  try {
+    const body = readFileSync(target);
+    res.type('video/mp2t');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(body);
+  } catch {
+    res.status(404).json({ error: 'segment_not_found' });
+  }
+});
+
+
 
 /**
  * Behind a managed platform the TLS connection ends at the edge and requests
@@ -285,6 +397,7 @@ function expandStream(streamId: string) {
       status: stream.status,
       storedUrl: stream.hlsUrl,
       fallbackUrl: process.env.MM_DEMO_HLS_URL,
+      mediaBaseUrl: mediaBaseUrl(),
     }),
   };
 }

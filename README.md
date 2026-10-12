@@ -33,6 +33,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Stream room** | ✅ Real HLS served from `/media`; web plays it (mobile player still pending) |
 | **Mobile native build** | ✅ **Runs on an iOS 27 simulator** — the full UI renders, verified by screenshot |
 | **Mobile photos** | ✅ Picker-to-API conversion verified against the real validator; camera/library needs a device |
 | **Mobile selling** | ✅ Captures real photographs — camera and gallery — into listings and the avatar |
@@ -43,7 +44,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **743 automated checks** across 25 suites — `pnpm verify:all` |
+| **Verification** | ✅ **751 automated checks** across 25 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -124,7 +125,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Authentication                         48 passed
   PASS  Persistence                            21 passed
   PASS  Browser UI (real Chrome)               41 passed
-  PASS  HLS playback (real browser)            29 passed
+  PASS  HLS playback (real browser)            37 passed
   PASS  Payments & membership                  35 passed
   PASS  Mobile (native build)                   42 passed
   PASS  Unified deployment                     28 passed
@@ -684,6 +685,52 @@ All fixed in the scripts that exist to fix them:
   `../lightningcss.darwin-arm64.node`
 
 Full audit green in the new layout: **735 passed, 0 failed.**
+
+## Real HLS in the stream room
+
+The stream room had nothing of its own to play. Every stream carried `hlsUrl: ""`, so
+the resolver fell back to three **third-party** public manifests — someone else's
+films on someone else's servers. Mobile had **no player at all**: `StreamScreen` had
+no video component, only a poster area. So "real HLS video in the stream room", a
+stated requirement, was **half met on web and not met on mobile**.
+
+### The media
+
+`scripts/generate-hls.sh` produces three branded broadcast loops with ffmpeg —
+genuine HLS, an `m3u8` playlist plus MPEG-TS segments, 2 seconds per segment with a
+forced keyframe on every boundary (which is what lets a player start quickly). They
+are served by the gateway at `/media/hls/<name>/index.m3u8`.
+
+**The content is deliberately abstract**: a moving brand-palette gradient with
+animated gold banding, not footage of a real auction and not a test card either.
+Nothing here pretends to be a real sale — the stream *room* and the HLS *pipeline*
+are what is being delivered. A real event supplies its own encoder output.
+
+The resolver now prefers these over the public manifests, and still labels them
+`demo`, because that is what they are. Calling a branded loop a "broadcast" would be
+the same kind of lie the seeded poster images were.
+
+### Two path bugs I introduced and fixed
+
+- **`MEDIA_ROOT` was wrong for the compiled build.** `../../media` is correct from
+  `src/`, but from `dist/services/api/src/` it resolved to `dist/services/media`,
+  and the playlist route answered `stream_not_found` for media sitting on disk. It
+  now tries candidates for both layouts.
+- **`listen()` is asynchronous.** `server.address()` is null immediately after the
+  call, so the proof built URLs against a fallback port nobody was serving and hls.js
+  reported `manifestLoadError` while the same URL fetched fine by hand.
+
+### Verification
+
+The HLS suite now proves **our own loops**, and self-hosts them so it does not depend
+on a gateway being up. Suite 29 → 37 checks; **4 manifests** (1 self-hosted +
+3 external) each parse and advance playback in a real Chrome.
+
+Two more integrity fixes in the suite itself: it verified all three loops when they
+come from **one generator** — the same work three times, which pushed it past a fixed
+60 s budget and made it **pass alone but fail inside the full audit** — and that
+budget was fixed regardless of how many sources existed. It now proves one loop and
+scales the budget with the manifest count.
 
 ## The mobile photo path, verified against the real API
 

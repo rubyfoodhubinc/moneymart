@@ -25,7 +25,22 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const flagIndex = args.indexOf('--timeout');
-const OVERALL_TIMEOUT_MS = flagIndex >= 0 && args[flagIndex + 1] ? Number(args[flagIndex + 1]) : 60_000;
+/**
+ * Budget for the whole run.
+ *
+ * Manifests are proved one after another in a single page, so the wall-clock cost
+ * grows with the number of sources. A fixed budget meant adding a source could fail
+ * the suite for a reason that has nothing to do with playback — which is exactly what
+ * happened when the self-hosted loops were added: it passed alone and timed out at
+ * 60000ms inside the full audit, where the machine is busier.
+ *
+ * The per-manifest allowance is deliberately generous because a cold Chrome start and
+ * a first manifest fetch dominate the cost.
+ */
+const PER_MANIFEST_MS = 25_000;
+const OVERALL_TIMEOUT_MS = flagIndex >= 0 && args[flagIndex + 1]
+  ? Number(args[flagIndex + 1])
+  : 30_000 + PER_MANIFEST_MS * 4;
 
 const CHROME_CANDIDATES = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -60,7 +75,148 @@ function demoManifests() {
   return [...block.matchAll(/'(https:\/\/[^']+)'/g)].map((match) => match[1]);
 }
 
-const MANIFESTS = process.env.MM_PROOF_HLS ? [process.env.MM_PROOF_HLS] : demoManifests();
+/**
+ * Media is served HERE, over the generated directory, rather than by an external
+ * process: the suite then proves the media itself decodes without depending on a
+ * gateway being up. The gateway's own route (which adds the CORS and cache headers)
+ * is covered by the stream-room checks.
+ *
+ * `MM_HLS_ORIGIN` overrides this to point at a running deployment.
+ */
+const HLS_MEDIA_PREFERRED_PORT = Number(process.env.MM_HLS_PORT ?? 4322);
+
+/**
+ * Serve services/api/media, mapping /media/hls/<name>/<file> onto
+ * media/hls/<name>/<file>.
+ *
+ * The first attempt at this served the media directory directly, which put the
+ * playlists at /hls/... while the resolver builds /media/hls/..., so every request
+ * 404'd and the manifest failed to load. Getting this mapping right is the whole
+ * job of the server.
+ */
+function startMediaServer() {
+  const mediaRoot = path.join(repoRoot, 'services', 'api', 'media');
+  if (!existsSync(mediaRoot)) {
+    bad('the generated HLS media exists', 'run `bash scripts/generate-hls.sh`');
+    return null;
+  }
+  const server = createServer((req, res) => {
+    const requested = decodeURIComponent((req.url ?? '/').split('?')[0]);
+    if (!requested.startsWith('/media/')) {
+      res.writeHead(404).end('not found');
+      return;
+    }
+    const relative = requested.replace(/^\/media\//, '');
+    // Containment: a traversal attempt must not escape the media root.
+    const target = path.normalize(path.join(mediaRoot, relative));
+    if (!target.startsWith(mediaRoot + path.sep)) {
+      res.writeHead(400).end('bad path');
+      return;
+    }
+    try {
+      const body = readFileSync(target);
+      res.writeHead(200, {
+        'content-type': target.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t',
+        'access-control-allow-origin': '*',
+        'cache-control': 'no-store',
+      });
+      res.end(body);
+    } catch {
+      res.writeHead(404).end('not found');
+    }
+  });
+  /**
+   * A fixed port collides when two runs overlap — which is exactly what happened:
+   * this suite passed 53/53 alone but failed inside the full audit with
+   * `manifestLoadError`, because the port was already held and the new listener
+   * never came up.
+   *
+   * `listen(0)` asks the OS for a free port. The origin is then derived from the
+   * port actually granted, so a retry can never point at a port nobody is serving.
+   */
+  server.listen(0, '127.0.0.1');
+  return server;
+}
+
+/**
+ * Wait for the listener and report the port it was actually given.
+ *
+ * `listen()` is asynchronous, so `server.address()` is null immediately after the
+ * call. Reading it too early silently fell back to the preferred port, and the
+ * manifests then pointed at a port nobody was serving — the browser reported
+ * `manifestLoadError` while the very same URL fetched fine by hand.
+ */
+function mediaOrigin(mediaServer) {
+  return new Promise((resolve) => {
+    if (!mediaServer) {
+      resolve(`http://127.0.0.1:${HLS_MEDIA_PREFERRED_PORT}`);
+      return;
+    }
+    const settle = () => {
+      const address = mediaServer.address();
+      const port = address && typeof address === 'object' ? address.port : HLS_MEDIA_PREFERRED_PORT;
+      resolve(`http://127.0.0.1:${port}`);
+    };
+    if (mediaServer.listening) settle();
+    else mediaServer.once('listening', settle);
+  });
+}
+
+/**
+ * Our OWN generated loops, which the resolver now prefers for a live room.
+ *
+ * ONE loop is proved, not all three. They are produced by the same generator with
+ * different colours, so decoding each is the same work three times over — and it was
+ * enough to push the run past its wall-clock budget, which is what made this suite
+ * pass alone and fail inside the full audit.
+ *
+ * The name is still read from the resolver source so a renamed or removed stream
+ * cannot silently escape verification.
+ */
+function selfHostedManifests(origin) {
+  const source = readFileSync(path.join(repoRoot, 'services', 'api', 'src', 'engine', 'playback.ts'), 'utf8');
+  const start = source.indexOf('SELF_HOSTED_STREAMS');
+  const block = source.slice(start, source.indexOf(']', start));
+  const names = [...block.matchAll(/'([a-z0-9-]+)'/g)].map((match) => match[1]);
+  return names.slice(0, 1).map((name) => `${origin}/media/hls/${name}/index.m3u8`);
+}
+
+/**
+ * The server is started BEFORE the manifests are built, because the port is chosen by
+ * the OS and the URLs have to carry it. Building them first meant an undefined origin
+ * whenever the preferred port was taken.
+ */
+const mediaServer = process.env.MM_HLS_ORIGIN ? null : startMediaServer();
+const HLS_MEDIA_ORIGIN = process.env.MM_HLS_ORIGIN ?? (await mediaOrigin(mediaServer));
+
+/**
+ * Wait until the listener actually accepts a request.
+ *
+ * `listen()` is asynchronous, and hls.js gives up almost immediately: without this
+ * the browser raced the server and every self-hosted manifest failed with
+ * `manifestLoadError` while the same URL fetched fine a moment later. A port that is
+ * bound but not yet accepting is indistinguishable from a dead one to the player.
+ */
+async function waitForMedia(origin, attempts = 50) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(`${origin}/media/hls/main/index.m3u8`, { signal: AbortSignal.timeout(1000) });
+      if (response.ok) return true;
+    } catch {
+      /* not accepting yet */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+if (mediaServer && !(await waitForMedia(HLS_MEDIA_ORIGIN))) {
+  bad('the media server accepts requests', HLS_MEDIA_ORIGIN);
+}
+
+const MANIFESTS = process.env.MM_PROOF_HLS
+  ? [process.env.MM_PROOF_HLS]
+  : [...selfHostedManifests(HLS_MEDIA_ORIGIN), ...demoManifests()];
 const PROOF_DIR = '/tmp/mm-hls-proof';
 const CDP_PORT = 9333;
 const WEB_PORT = 4599;
