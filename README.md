@@ -25,9 +25,9 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Memberships** | ✅ RevenueCat entitlements — Pro pricing 10%/15% enforced server-side |
 | **Live video** | ✅ Real HLS in the stream room — proven decoding in headless Chrome |
 | **Studio** | ✅ Drag-to-reorder sections + seller photo reordering (§5.2) |
-| **Authentication** | ✅ Passwordless OTP — wired through web, mobile **and** TV, verified in a real browser |
+| **Authentication** | ✅ Passwordless OTP on REST **and** the realtime layer — writes require a verified identity |
 | **Persistence** | ✅ Postgres snapshotting — data survives redeploys (proven in production) |
-| **Verification** | ✅ **341 automated checks** across 12 suites — `pnpm verify:all` |
+| **Verification** | ✅ **356 automated checks** across 13 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -114,7 +114,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  341 passed   0 failed
+  TOTAL  356 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -126,6 +126,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
+pnpm verify:socket-auth  # anonymous writes refused, identities not spoofable (15)
 pnpm verify:persistence  # restart round-trip, corrupt-snapshot recovery, opt-out (20)
 pnpm verify:ui         # real Chrome: pages mount, drag handles, keyboard reorder (22)
 pnpm verify:hls        # real Chrome decodes every resolver manifest (29)
@@ -334,7 +335,42 @@ Two dishonest behaviours were removed rather than left in place:
 - Studio's signed-out gate offered the development switcher. It now performs a
   real sign-in.
 
-### Three production bypasses, closed
+### The realtime layer was open
+
+The Socket.IO layer had **no authentication at all**, and its write handlers read
+`bidderId` from the payload. An anonymous client could place a real bid as any
+user. Proven against production:
+
+```
+REST  anonymous bid → 401          ← the HTTP surface looked locked down
+socket connected anonymously
+auction:placeBid as usr_ken → ACCEPTED
+lot auc_audi: 12200 → 12700, 9 bids, usr_ken winning
+```
+
+The token now travels in the **handshake**, because a WebSocket upgrade cannot
+carry an `Authorization` header from a browser. Every write handler uses the
+verified identity:
+
+| Handler | Now |
+|---|---|
+| `auction:placeBid` / `autoBid` | payload `bidderId` **ignored**, not merely validated |
+| `auction:autoBidOff` | scoped to the caller |
+| `chat:send` | authorship from the token — names and creator badges cannot be forged |
+| `chat:pin` | requires being the room's creator |
+| `user:join` | joins the **authenticated** user's room, ignoring the requested id |
+
+Anonymous writes are refused with `not_authenticated`; **spectating stays open**,
+so a signed-out visitor can still watch. Both clients send the token and
+re-handshake on sign-in/sign-out, since an existing socket keeps its original
+authentication until it reconnects.
+
+Two suite failures this surfaced were **tests relying on the hole**: one emitted a
+different user's id from another user's socket, and another pinned as a creator
+who did not own the room. Both now authenticate properly through a dev-only token
+endpoint that production refuses, rather than weakening the guard.
+
+### Three REST bypasses, closed
 
 Identity used to be an unverified `x-mm-user` header, and the mobile OTP accepted
 any six digits. Fixing it surfaced three ways production was open — each found by
