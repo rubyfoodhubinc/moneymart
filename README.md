@@ -33,7 +33,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
-| **Mobile native build** | ✅ Builds and installs on a simulator; launch is blocked by iOS 27 vs RN 0.79 |
+| **Mobile native build** | ✅ **Runs on an iOS 27 simulator** — the full UI renders, verified by screenshot |
 | **Mobile photos** | ✅ Picker-to-API conversion verified against the real validator; camera/library needs a device |
 | **Mobile selling** | ✅ Captures real photographs — camera and gallery — into listings and the avatar |
 | **Account settings** | ✅ Preferences persist server-side; data export is a real, scoped download |
@@ -43,7 +43,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **735 automated checks** across 25 suites — `pnpm verify:all` |
+| **Verification** | ✅ **743 automated checks** across 25 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -592,20 +592,52 @@ installed and launched on a booted iPhone 18 Pro simulator. The
 `NSCameraUsageDescription` and `NSPhotoLibraryUsageDescription` into the generated
 `Info.plist`, and `EXImageLoader`/`ExpoImagePicker` are in the built workspace.
 
-### Where it stops, precisely
+### The iOS 27 launch crash, fixed
 
-The app crashes on launch with `EXC_BREAKPOINT` in:
+The app built, installed, launched — then died with `EXC_BREAKPOINT` in:
 
 ```
 _UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption
 ```
 
-The generated `Info.plist` declares **no scene manifest** and `AppDelegate.swift`
-still builds a `window = UIWindow(...)`, so **iOS 27** — the only runtime the
-installed simulator offers — terminates an app that has not adopted the scene
-lifecycle. That is a **React Native 0.79 / iOS 27 compatibility gap**, not an app
-defect. Closing it needs either an **iOS 18 simulator runtime** or a newer Expo SDK,
-and neither is a one-line change.
+**iOS 27 terminates any app that has not adopted the scene lifecycle.** I first
+guessed a newer Expo SDK would fix it. Checking rather than assuming showed it would
+**not**: the newest SDK (57) still emits no scene manifest — `@expo/prebuild-config`
+has no reference to `UIApplicationSceneManifest` or `UIScene` anywhere — and React
+Native's template still builds `window = UIWindow(...)` in
+`didFinishLaunchingWithOptions`. An SDK upgrade would have been a large, risky
+migration that fixed nothing.
+
+So the app carries its own **prebuild plugin**, `plugins/withSceneLifecycle.js`:
+
+1. declares `UIApplicationSceneManifest` in `Info.plist`, naming the delegate class
+2. replaces `AppDelegate.swift` — keeping `bindReactNativeFactory` at launch, since
+   every Expo module depends on it, and changing exactly one thing: **no window**
+3. adds a `SceneDelegate` that creates the window and starts React Native into it
+4. **adds the file to the Xcode target's Sources phase** — the easy-to-miss step: a
+   `.swift` file on disk is not compiled. Verified directly: the project reported
+   `SceneDelegate in sources: NO` before, `YES` after
+
+It is a plugin rather than an edit to `ios/` because `ios/` is generated and
+gitignored — a hand edit is lost on the next prebuild, which is how the
+fabricated-photo bug survived as long as it did.
+
+### Verified on a real simulator, not by inspection
+
+- **BUILD SUCCEEDED** — 1054 compile steps, zero errors
+- installed and launched on a booted **iPhone 18 Pro, iOS 27**
+- process **alive and stable**, no crash report
+- Metro served the bundle: `iOS Bundled 2379ms apps/mobile/index.ts (1407 modules)`
+- the screenshot shows the real app — the MoneyMart mark, the onboarding carousel
+  ("Bid in Real Time", the anti-snipe explanation), the gold gradient button, the
+  brand type. **The first time the mobile UI has been seen running.**
+
+One dev-loop detail: the app requests its bundle on the **default port 8081**, so
+Metro must run there rather than 8082, or the app shows React Native's red box
+"No script URL provided".
+
+Guarded with **8 checks** in the mobile suite, because the native output is
+generated — without them a prebuild could quietly drop the fix.
 
 ### Three environment regressions the layout switch caused
 

@@ -321,6 +321,77 @@ stubCopy.length === 0
   ? ok('no screen promises a feature that does not exist')
   : bad('no screen promises a feature that does not exist', stubCopy.slice(0, 3).join(' | '));
 
+/* ── 2d. iOS 27 scene lifecycle ────────────────────────────────────────── */
+
+/**
+ * iOS 27 kills an app that has not adopted the scene lifecycle, and the failure
+ * says almost nothing:
+ *
+ *   EXC_BREAKPOINT in _UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption
+ *
+ * Neither Expo nor React Native provides this — the newest SDK still emits no scene
+ * manifest — so the app carries its own prebuild plugin. Asserted here because the
+ * native output is GENERATED and gitignored: without this, a prebuild could quietly
+ * drop the fix and there would be no failing check to notice.
+ */
+section('2d. iOS 27 scene lifecycle');
+
+const sceneAppConfig = JSON.parse(readFileSync(path.join(mobileDir, 'app.json'), 'utf8'));
+const pluginEntries = (sceneAppConfig.expo.plugins ?? []).map((entry) => (Array.isArray(entry) ? entry[0] : entry));
+pluginEntries.some((entry) => String(entry).includes('withSceneLifecycle'))
+  ? ok('the scene-lifecycle plugin is registered in app.json')
+  : bad('the scene-lifecycle plugin is registered in app.json', JSON.stringify(pluginEntries));
+
+const pluginPath = path.join(mobileDir, 'plugins', 'withSceneLifecycle.js');
+if (!existsSync(pluginPath)) {
+  bad('the scene-lifecycle plugin exists', pluginPath);
+} else {
+  const plugin = readFileSync(pluginPath, 'utf8');
+
+  // The manifest is what makes UIKit ask for a scene at all.
+  /UIApplicationSceneManifest/.test(plugin)
+    ? ok('the plugin declares UIApplicationSceneManifest')
+    : bad('the plugin declares UIApplicationSceneManifest');
+
+  /UISceneDelegateClassName/.test(plugin)
+    ? ok('the plugin names the scene delegate class')
+    : bad('the plugin names the scene delegate class');
+
+  /**
+   * The window must move OUT of didFinishLaunchingWithOptions. Creating it there is
+   * the pre-scene pattern and is what the crash was about, so the generated app
+   * delegate must not contain it.
+   */
+  const appDelegateSource = plugin.slice(plugin.indexOf('const APP_DELEGATE'), plugin.indexOf('module.exports'));
+  !/window = UIWindow\(frame: UIScreen\.main\.bounds\)/.test(appDelegateSource)
+    ? ok('the app delegate no longer creates the window at launch')
+    : bad('the app delegate no longer creates the window at launch', 'the pre-scene pattern is still present');
+
+  // But the Expo hook that every module depends on must survive the change.
+  /bindReactNativeFactory/.test(appDelegateSource)
+    ? ok('bindReactNativeFactory still runs at launch', 'every Expo module depends on it')
+    : bad('bindReactNativeFactory still runs at launch');
+
+  // The scene has to start React Native, or nothing renders.
+  const sceneSource = plugin.slice(plugin.indexOf('const SCENE_DELEGATE'), plugin.indexOf('const APP_DELEGATE'));
+  /UIWindowSceneDelegate/.test(sceneSource)
+    ? ok('a scene delegate is provided')
+    : bad('a scene delegate is provided');
+
+  /startReactNative/.test(sceneSource)
+    ? ok('the scene delegate starts React Native into its window')
+    : bad('the scene delegate starts React Native into its window');
+
+  /**
+   * Writing the file is not enough — Xcode compiles only what is listed in the
+   * target's Sources build phase. Verified directly: the check reported NO before
+   * this step existed, and the build failed to adopt a scene.
+   */
+  /withXcodeProject/.test(plugin) && /addSourceFile/.test(plugin)
+    ? ok('the new Swift file is added to the Xcode target', 'a file on disk is not compiled')
+    : bad('the new Swift file is added to the Xcode target');
+}
+
 /* ── 3. Native bundles ─────────────────────────────────────────────────── */
 section('3. Native bundles (iOS + Android)');
 
