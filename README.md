@@ -30,9 +30,10 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Authorization** | ✅ Object-level checks — orders private to participants, storefront writes owner-scoped |
 | **Rate limiting** | ✅ Ingress limits on the message-sending and write paths |
 | **CI** | ✅ Green on GitHub — 345 checks over 13 suites on every push |
+| **Code delivery** | ✅ SMS via Twilio Messages and email via Resend — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
-| **Verification** | ✅ **491 automated checks** across 18 suites — `pnpm verify:all` |
+| **Verification** | ✅ **522 automated checks** across 19 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -119,7 +120,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  491 passed   0 failed
+  TOTAL  522 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -131,6 +132,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
+pnpm verify:delivery   # the sent code is the verified code; senders and failures (31)
 pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (47)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
 pnpm verify:images     # SVG/script refusal, type sniffing, count and size bounds (20)
@@ -410,6 +412,39 @@ auth: {"demoHeader": false}
 Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
+
+## Sign-in code delivery (SMS and email)
+
+Delivery was the one part of authentication that had never been exercised, because
+it needs a paid provider. Reading the code was enough to find the bug in it:
+
+> **Twilio's Verify product generates its own code and ignores any supplied one.**
+> The platform generates a code, stores a hash of it, and sent that code to Twilio
+> Verify — so the user would receive *Twilio's* digits while `verify()` compared
+> against the hash of *ours*. **Every SMS sign-in would have been rejected as an
+> invalid code**, and only a real text message could have exposed it.
+
+The **Messages API** is used instead, because it sends the exact body it is given.
+A sender is required — either a Messaging Service SID (preferred, so senders can be
+swapped without a deploy) or a from-number — and without one SMS is reported as
+unconfigured rather than silently failing.
+
+Email uses Resend, with `RESEND_FROM` defaulting to `onboarding@resend.dev`, which
+works **without a verified domain** so a first sign-in is possible before DNS is
+done.
+
+```bash
+pnpm verify:delivery   # 31 checks: sent code == verified code, senders, failure reasons
+```
+
+Verified against mock Twilio and Resend endpoints, end to end: the code read out of
+the delivered SMS **and** out of the delivered email completes a real sign-in, the
+HTML and text parts agree, basic/bearer auth is correct, and a provider failure
+carries its specific reason through (`twilio_400_21608`, `resend_403_validation_error`)
+rather than collapsing to a bare status.
+
+A mock cannot prove the real vendors behave identically — but it does prove the
+thing that was actually wrong.
 
 ## Social sign-in (Google and Apple)
 

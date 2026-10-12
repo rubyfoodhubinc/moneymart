@@ -160,8 +160,97 @@ export interface DeliveryResult {
  */
 export function deliveryConfigured(): { sms: boolean; email: boolean } {
   return {
-    sms: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_VERIFY_SERVICE_SID),
+    sms: Boolean(
+      process.env.TWILIO_ACCOUNT_SID &&
+        process.env.TWILIO_AUTH_TOKEN &&
+        (process.env.TWILIO_MESSAGING_SERVICE_SID || process.env.TWILIO_FROM_NUMBER),
+    ),
     email: Boolean(process.env.RESEND_API_KEY),
+  };
+}
+
+/**
+ * Send an SMS carrying OUR code.
+ *
+ * Twilio's Verify product GENERATES its own code and ignores anything supplied,
+ * so pairing it with a locally generated code cannot work: the user receives
+ * Twilio's digits while `verify()` compares against the hash of ours, and every
+ * attempt is rejected as invalid. The Messages API is used instead, because it
+ * sends the exact body we hand it, which is what the local challenge verifies.
+ *
+ * Both Twilio sender forms are accepted — a Messaging Service SID, which is what
+ * production numbers should use so senders can be swapped without a deploy, or a
+ * plain from-number for a simpler setup.
+ */
+/**
+ * Provider endpoints, overridable so delivery can be exercised against a local
+ * mock. The defaults are the real services, so an override is never needed in
+ * production — but without it the exact bug this code carries a warning about
+ * (Twilio generating its own code) could only ever be found by a human receiving
+ * a text message.
+ */
+const twilioBase = () => process.env.MM_TWILIO_API_BASE ?? 'https://api.twilio.com';
+const resendBase = () => process.env.MM_RESEND_API_BASE ?? 'https://api.resend.com';
+
+async function sendSms(to: string, body: string): Promise<{ delivered: boolean; detail?: string }> {
+  const sid = process.env.TWILIO_ACCOUNT_SID ?? '';
+  const token = process.env.TWILIO_AUTH_TOKEN ?? '';
+  const messagingService = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  const fromNumber = process.env.TWILIO_FROM_NUMBER;
+
+  if (!messagingService && !fromNumber) {
+    return { delivered: false, detail: 'twilio_sender_not_configured' };
+  }
+
+  const form = new URLSearchParams({ To: to, Body: body });
+  if (messagingService) form.set('MessagingServiceSid', messagingService);
+  else form.set('From', fromNumber as string);
+
+  try {
+    const response = await fetch(`${twilioBase()}/2010-04-01/Accounts/${sid}/Messages.json`, {
+      method: 'POST',
+      headers: {
+        authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: form.toString(),
+    });
+    if (response.ok) return { delivered: true };
+
+    /**
+     * The failure reason is carried through rather than collapsed to a status.
+     * Twilio's most common first-run errors are specific and actionable — an
+     * unverified destination on a trial account, or a sender that is not owned by
+     * the account — and a bare `twilio_400` tells an operator nothing.
+     */
+    const payload = (await response.json().catch(() => null)) as { code?: number; message?: string } | null;
+    const reason = payload?.code ? `twilio_${response.status}_${payload.code}` : `twilio_${response.status}`;
+    return { delivered: false, detail: reason };
+  } catch (error) {
+    return { delivered: false, detail: error instanceof Error ? error.message : 'twilio_error' };
+  }
+}
+
+/** The email body. Plain text plus a minimal HTML part. */
+function codeEmail(code: string): { subject: string; text: string; html: string } {
+  const minutes = Math.round(OTP_TTL_MS / 60000);
+  return {
+    subject: `${code} is your MoneyMart code`,
+    text: `Your MoneyMart sign-in code is ${code}.\n\nIt expires in ${minutes} minutes and can be used once.\nIf you did not request this, you can ignore this email.`,
+    /**
+     * Deliberately plain: a code email that looks like marketing gets filtered, and
+     * the only thing the reader needs is the number.
+     */
+    html: `<div style="font-family:Inter,Helvetica,Arial,sans-serif;background:#0D1B2A;padding:32px">
+  <div style="max-width:440px;margin:0 auto;background:#1C1C1E;border:1px solid rgba(245,166,35,0.28);border-radius:16px;padding:28px">
+    <div style="color:#F5A623;font-size:13px;letter-spacing:0.16em;text-transform:uppercase">MoneyMart</div>
+    <p style="color:#FFFFFF;font-size:15px;margin:18px 0 6px">Your sign-in code</p>
+    <div style="color:#FFFFFF;font-size:34px;font-weight:700;letter-spacing:0.22em">${code}</div>
+    <p style="color:rgba(255,255,255,0.62);font-size:13px;margin-top:18px">
+      Expires in ${minutes} minutes and can be used once. If you did not request this, ignore this email.
+    </p>
+  </div>
+</div>`,
   };
 }
 
@@ -174,45 +263,42 @@ export function deliveryConfigured(): { sms: boolean; email: boolean } {
  * development rather than claiming a message was sent.
  */
 export async function deliverCode(identifier: NormalisedIdentifier, code: string): Promise<DeliveryResult> {
-  const twilioSid = process.env.TWILIO_ACCOUNT_SID;
-  const twilioToken = process.env.TWILIO_AUTH_TOKEN;
-  const twilioService = process.env.TWILIO_VERIFY_SERVICE_SID;
+  const { sms: smsReady, email: emailReady } = deliveryConfigured();
 
-  if (identifier.kind === 'phone' && twilioSid && twilioToken && twilioService) {
-    try {
-      const response = await fetch(
-        `https://verify.twilio.com/v2/Services/${twilioService}/Verifications`,
-        {
-          method: 'POST',
-          headers: {
-            authorization: `Basic ${Buffer.from(`${twilioSid}:${twilioToken}`).toString('base64')}`,
-            'content-type': 'application/x-www-form-urlencoded',
-          },
-          body: new URLSearchParams({ To: identifier.destination, Channel: 'sms' }).toString(),
-        },
-      );
-      if (response.ok) return { delivered: true, transport: 'twilio' };
-      return { delivered: false, transport: 'twilio', detail: `twilio_${response.status}` };
-    } catch (error) {
-      return { delivered: false, transport: 'twilio', detail: error instanceof Error ? error.message : 'twilio_error' };
-    }
+  if (identifier.kind === 'phone' && smsReady) {
+    const result = await sendSms(
+      identifier.destination,
+      `${code} is your MoneyMart sign-in code. It expires in ${Math.round(OTP_TTL_MS / 60000)} minutes.`,
+    );
+    return { delivered: result.delivered, transport: 'twilio', ...(result.detail ? { detail: result.detail } : {}) };
   }
 
   const resendKey = process.env.RESEND_API_KEY;
-  if (identifier.kind === 'email' && resendKey) {
+  if (identifier.kind === 'email' && emailReady && resendKey) {
+    const template = codeEmail(code);
     try {
-      const response = await fetch('https://api.resend.com/emails', {
+      const response = await fetch(`${resendBase()}/emails`, {
         method: 'POST',
         headers: { authorization: `Bearer ${resendKey}`, 'content-type': 'application/json' },
         body: JSON.stringify({
-          from: process.env.MM_AUTH_FROM ?? 'MoneyMart <no-reply@moneymart.app>',
+          /**
+           * RESEND_FROM is the sender. `onboarding@resend.dev` works without a
+           * verified domain, which makes a first run possible before DNS is done;
+           * a branded address requires the domain to be verified in Resend.
+           */
+          from: process.env.RESEND_FROM ?? process.env.MM_AUTH_FROM ?? 'MoneyMart <onboarding@resend.dev>',
           to: [identifier.destination],
-          subject: `Your MoneyMart code: ${code}`,
-          text: `Your MoneyMart sign-in code is ${code}. It expires in 5 minutes.`,
+          subject: template.subject,
+          text: template.text,
+          html: template.html,
         }),
       });
       if (response.ok) return { delivered: true, transport: 'resend' };
-      return { delivered: false, transport: 'resend', detail: `resend_${response.status}` };
+
+      // Resend explains itself in the body; a bare status hides the real cause.
+      const payload = (await response.json().catch(() => null)) as { message?: string; name?: string } | null;
+      const reason = payload?.name ?? payload?.message ?? 'unknown';
+      return { delivered: false, transport: 'resend', detail: `resend_${response.status}_${String(reason).slice(0, 60)}` };
     } catch (error) {
       return { delivered: false, transport: 'resend', detail: error instanceof Error ? error.message : 'resend_error' };
     }

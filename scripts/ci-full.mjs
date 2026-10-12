@@ -60,7 +60,7 @@ const API_SUITES = [
  * CORS, the app origin and the provider endpoints together; it is listed here
  * only so it runs as part of the gate.
  */
-const FULL_SUITES = ['verify-oauth.mjs', 'verify-tv.mjs', 'health.mjs'];
+const FULL_SUITES = ['verify-delivery.mjs', 'verify-oauth.mjs', 'verify-tv.mjs', 'health.mjs'];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const chromePath = [

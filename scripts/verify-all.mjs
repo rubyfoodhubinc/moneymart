@@ -46,6 +46,11 @@ const SUITES = [
     detail: 'OTP flow, canonicalisation, refusals, code hygiene, production posture',
   },
   {
+    name: 'Code delivery (SMS + email)',
+    script: 'verify-delivery.mjs',
+    detail: 'the sent code is the verified code, sender forms, failure reasons',
+  },
+  {
     name: 'Social sign-in',
     script: 'verify-oauth.mjs',
     detail: 'real JWKS, PKCE, single-use state, verified-email linking, browser handoff',
