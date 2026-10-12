@@ -33,7 +33,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ SMS via Twilio Messages and email via Resend — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
-| **Verification** | ✅ **522 automated checks** across 19 suites — `pnpm verify:all` |
+| **Verification** | ✅ **527 automated checks** across 19 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -113,14 +113,14 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Payments & membership                  35 passed
   PASS  Authentication                         48 passed
   PASS  Persistence                            21 passed
-  PASS  Browser UI (real Chrome)               36 passed
+  PASS  Browser UI (real Chrome)               41 passed
   PASS  HLS playback (real browser)            29 passed
   PASS  Payments & membership                  35 passed
   PASS  Mobile (native build)                   42 passed
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  522 passed   0 failed
+  TOTAL  527 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -412,6 +412,36 @@ auth: {"demoHeader": false}
 Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
+
+## Email delivery: live, with one DNS step outstanding
+
+`RESEND_API_KEY` is configured on the Railway service and **sign-in works**:
+
+```
+/api/health       → auth.delivery: { sms: false, email: true }
+/api/auth/request → delivered: true, transport: resend, reachable: true
+```
+
+One limitation is imposed by Resend, not by the code: **an unverified sending
+domain may only deliver to `delivered@resend.dev`.** A request to any other
+address is refused with `resend_422_validation_error`, and the panel reports that
+reason rather than pretending the message was sent.
+
+`moneymart.app` has been added to Resend and is awaiting four DNS records. **The
+domain is served by IONOS nameservers** (`ns1114.ui-dns.com` and friends), not
+Cloudflare, so the records go in the IONOS DNS panel:
+
+| Type | Name | Value |
+|---|---|---|
+| TXT | `resend._domainkey` | the DKIM public key Resend issues |
+| MX | `send` | `feedback-smtp.us-east-1.amazonses.com` |
+| TXT | `send` | `v=spf1 include:amazonses.com ~all` |
+| CNAME | `rsend` | `send.forge.rmta.net` |
+
+Once they propagate, `RESEND_FROM` (already set to
+`MoneyMart <codes@moneymart.app>`) begins working with no code change or redeploy.
+Until then, sign-in completes for `delivered@resend.dev` and the failure path is
+reported honestly for everyone else.
 
 ## Sign-in code delivery (SMS and email)
 
