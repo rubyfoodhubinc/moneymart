@@ -25,8 +25,9 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Memberships** | ✅ RevenueCat entitlements — Pro pricing 10%/15% enforced server-side |
 | **Live video** | ✅ Real HLS in the stream room — proven decoding in headless Chrome |
 | **Studio** | ✅ Drag-to-reorder sections + seller photo reordering (§5.2) |
+| **Authentication** | ✅ Passwordless OTP — verified end to end in production |
 | **Persistence** | ✅ Postgres snapshotting — data survives redeploys (proven in production) |
-| **Verification** | ✅ **278 automated checks** across 11 suites — `pnpm verify:all` |
+| **Verification** | ✅ **326 automated checks** across 12 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -104,6 +105,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Payments & escrow (§9.1)               31 passed
   PASS  TV / IPTV (§7)                         35 passed
   PASS  Payments & membership                  35 passed
+  PASS  Authentication                         48 passed
   PASS  Persistence                            20 passed
   PASS  Browser UI (real Chrome)               22 passed
   PASS  HLS playback (real browser)            29 passed
@@ -112,7 +114,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  278 passed   0 failed
+  TOTAL  326 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -123,6 +125,7 @@ pnpm verify            # engine rules over REST (31)
 pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
+pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
 pnpm verify:persistence  # restart round-trip, corrupt-snapshot recovery, opt-out (20)
 pnpm verify:ui         # real Chrome: pages mount, drag handles, keyboard reorder (22)
 pnpm verify:hls        # real Chrome decodes every resolver manifest (29)
@@ -277,6 +280,64 @@ Connect. The stub says so rather than pretending otherwise.
 Until a key is present the `SimulatedProvider` runs the identical lifecycle, so
 the flow is never dead-ended. Declines are reproducible on demand (amount ending
 `.13`).
+
+## Authentication (§9.1)
+
+Passwordless one-time codes. A code proves control of an email address or phone
+number, and possession of that identifier **is** the account — there is no
+password database to breach and no reset flow to build, and the phone
+verification a marketplace handling money needs anyway falls out of the same
+mechanism.
+
+```
+POST /api/auth/request  { identifier }        → issues a code (hashed, 5 min, single use)
+POST /api/auth/verify   { identifier, code }  → issues a session token
+Authorization: Bearer <token>                 → identifies the caller
+POST /api/auth/signout                        → revokes it (idempotent)
+```
+
+Codes are hashed with a server-side pepper before storage, expire in five
+minutes, are single-use, and burn after five failed attempts — including the
+correct code, once burned. Identifiers are canonicalised so `Ada@Example.com`
+and `ada@example.com` are one account, and `+234 801 234 5678` and
+`+2348012345678` are one account. Treating those as separate is how duplicate
+identities appear.
+
+Delivery is honest about its own limits. With no provider configured the code is
+logged and the response says `transport: "log"`; it is never silently dropped,
+because a login that cannot be completed must fail loudly rather than appear to
+succeed. Twilio Verify handles phone, Resend handles email.
+
+### Three production bypasses, closed
+
+Identity used to be an unverified `x-mm-user` header, and the mobile OTP accepted
+any six digits. Fixing it surfaced three ways production was open — each found by
+**asserting data rather than status codes**:
+
+| Defect | Impact |
+|---|---|
+| `actorId` fell back to the store's session user, which `seed.ts` pre-populates with the demo buyer | **Every** unauthenticated production request resolved to a real, fully-privileged account |
+| The identity guard was mounted *before* the auth routes | It intercepted the requests that obtain a token — nobody could sign in |
+| A method-only public-read rule | An unauthenticated `GET /api/wallet` answered 200 with an empty account, reading as a real balance of zero |
+
+The guard now runs after the public and authentication routes, dev fallbacks live
+only in the development branch, and account-scoped reads are named explicitly so
+a new endpoint is **private until deliberately made public**.
+
+Verified against live production:
+
+```
+x-mm-user=usr_you  → /api/wallet   401   no data returned
+no identity        → /api/wallet   401
+GET  /api/auctions                 200   public reads still work signed out
+POST /api/auctions (no identity)   401
+POST /api/session                  403   identity switch disabled
+auth: {"demoHeader": false}
+```
+
+Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
+durable document that gets copied around, and bearer tokens do not belong in one.
+Restarting drops sessions, which is the safe direction to fail.
 
 ## Persistence
 
