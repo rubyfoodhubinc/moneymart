@@ -29,6 +29,14 @@ const BASE = flagIndex >= 0 && args[flagIndex + 1] ? args[flagIndex + 1] : (proc
 const CA_PATH = path.join(repoRoot, '.certs', 'ca.crt');
 const isTls = BASE.startsWith('https://');
 
+/**
+ * A local deployment presents the development CA; a hosted one presents a real
+ * publicly-trusted certificate. Only the former needs the CA file, and only the
+ * former may relax Node's verification — a production check must not.
+ */
+const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(BASE);
+const useLocalCa = isTls && isLocalOrigin && existsSync(CA_PATH);
+
 let pass = 0;
 let fail = 0;
 const failures = [];
@@ -54,7 +62,7 @@ const section = (title) => console.log(`\n\u001b[1m${title}\u001b[0m`);
  * certificate assertion in section 1 still verifies the chain properly.
  */
 let ca;
-if (isTls && existsSync(CA_PATH)) {
+if (useLocalCa) {
   ca = readFileSync(CA_PATH);
   process.env.NODE_EXTRA_CA_CERTS = CA_PATH;
   if (process.env.MM_STRICT_TLS !== '1') {
@@ -95,11 +103,28 @@ console.log(`\u001b[2m  origin ${BASE}${ca ? '  (local CA loaded)' : ''}\u001b[0
 section('1. Transport security');
 if (isTls) {
   const tlsOk = await new Promise((resolve) => {
+    const url = new URL(BASE);
+    // A hosted origin must verify against the system trust store.
+    if (!ca && !isLocalOrigin) {
+      const socket = tls.connect(
+        { host: url.hostname, port: Number(url.port || 443), servername: url.hostname, rejectUnauthorized: true },
+        () => {
+          const cert = socket.getPeerCertificate();
+          resolve({ ok: socket.authorized, reason: '', subject: cert.subject?.CN, alt: cert.subjectaltname, issuer: cert.issuer?.O });
+          socket.end();
+        },
+      );
+      socket.on('error', (error) => resolve({ ok: false, reason: error.message }));
+      socket.setTimeout(8000, () => {
+        socket.destroy();
+        resolve({ ok: false, reason: 'timeout' });
+      });
+      return;
+    }
     if (!ca) {
       resolve({ ok: false, reason: 'no CA file' });
       return;
     }
-    const url = new URL(BASE);
     const socket = tls.connect(
       { host: url.hostname, port: Number(url.port || 443), ca, servername: url.hostname, rejectUnauthorized: true },
       () => {
@@ -120,13 +145,21 @@ if (isTls) {
     });
   });
 
-  tlsOk.ok
-    ? ok('certificate verifies against the local CA', `CN=${tlsOk.subject}`)
-    : bad('certificate verifies against the local CA', tlsOk.reason);
-
-  tlsOk.alt && /localhost|127\.0\.0\.1/.test(tlsOk.alt)
-    ? ok('certificate SAN covers localhost', tlsOk.alt.slice(0, 58))
-    : bad('certificate SAN covers localhost', tlsOk.alt ?? 'missing');
+  if (isLocalOrigin) {
+    tlsOk.ok
+      ? ok('certificate verifies against the local CA', `CN=${tlsOk.subject}`)
+      : bad('certificate verifies against the local CA', tlsOk.reason);
+    tlsOk.alt && /localhost|127\.0\.0\.1/.test(tlsOk.alt)
+      ? ok('certificate SAN covers localhost', tlsOk.alt.slice(0, 52))
+      : bad('certificate SAN covers localhost', tlsOk.alt ?? 'missing');
+  } else {
+    tlsOk.ok
+      ? ok('certificate verifies against the system trust store', `${tlsOk.subject ?? ''} · issued by ${tlsOk.issuer ?? 'unknown'}`)
+      : bad('certificate verifies against the system trust store', tlsOk.reason);
+    tlsOk.alt
+      ? ok('certificate covers the requested host', tlsOk.alt.slice(0, 52))
+      : bad('certificate covers the requested host', 'no SAN');
+  }
 } else {
   ok('running over plain HTTP', 'TLS disabled for this run');
 }
@@ -277,7 +310,8 @@ try {
     const socket = io(BASE, {
       path: '/socket.io',
       transports: ['websocket'],
-      rejectUnauthorized: Boolean(ca) ? true : undefined,
+      // A hosted origin is verified normally; only the local CA run opts out.
+      rejectUnauthorized: true,
       ca: ca ? [ca] : undefined,
       timeout: 8000,
     });

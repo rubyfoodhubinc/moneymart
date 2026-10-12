@@ -20,15 +20,25 @@ export interface StaticHostOptions {
   secure?: boolean;
 }
 
-/** Security headers applied to every response. */
-function securityHeaders(secure: boolean) {
-  return (_req: Request, res: Response, next: NextFunction): void => {
+/**
+ * Security headers applied to every response.
+ *
+ * HSTS is decided per request from the effective protocol rather than from
+ * whether this process terminates TLS itself. A managed platform (Railway,
+ * Render, Fly) terminates TLS at its edge and forwards plain HTTP, so keying
+ * HSTS off a local certificate silently omits it in production — the exact
+ * deployment where it matters most.
+ */
+function securityHeaders(terminatesTlsLocally: boolean) {
+  return (req: Request, res: Response, next: NextFunction): void => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(self), camera=(self)');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-    if (secure) {
+    const forwardedProto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim();
+    const effectiveProtocol = forwardedProto || (terminatesTlsLocally ? 'https' : req.protocol);
+    if (effectiveProtocol === 'https') {
       // Two years, subdomains included — standard hardening once TLS is real.
       res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
     }

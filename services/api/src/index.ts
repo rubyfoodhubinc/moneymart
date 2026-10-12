@@ -47,6 +47,14 @@ const PORT = Number(process.env.PORT ?? 4317);
 const app = express();
 
 /**
+ * Behind a managed platform the TLS connection ends at the edge and requests
+ * arrive over plain HTTP carrying X-Forwarded-Proto. Trusting the first proxy
+ * hop makes req.protocol and req.ip reflect the real client, which the HSTS
+ * decision and rate limiting depend on.
+ */
+app.set('trust proxy', 1);
+
+/**
  * Transport. When certificate paths are supplied the gateway serves HTTPS, so a
  * single origin covers the SPA, the REST API and the WebSocket upgrade — which
  * is also what browsers require before they will grant camera access or honour
