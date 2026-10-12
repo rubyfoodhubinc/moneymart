@@ -191,6 +191,74 @@ appJson.scheme === 'moneymart'
   ? ok('custom URL scheme is moneymart:// (matches the TV QR)')
   : bad('custom URL scheme is moneymart:// (matches the TV QR)', appJson.scheme);
 
+/* ── 2b. The shipped app can reach a gateway ───────────────────────────── */
+
+/**
+ * The app shipped with `apiUrl: http://127.0.0.1:4317`, and on a phone that is the
+ * PHONE's own loopback — so every request went nowhere and the product was
+ * unusable outside a simulator. The suite verified identity and bundling and never
+ * once asked whether the app could reach anything.
+ */
+section('2b. The gateway the shipped app talks to');
+
+const configuredApi = String(appJson.extra?.apiUrl ?? '');
+configuredApi ? ok('expo.extra.apiUrl is declared', configuredApi) : bad('expo.extra.apiUrl is declared');
+
+/**
+ * A release build must not point at loopback. This is the assertion that would
+ * have caught the original defect.
+ */
+const isLoopbackTarget = /^https?:\/\/(127\.0\.0\.1|localhost|10\.0\.2\.2|\[::1\])(:|\/|$)/.test(configuredApi);
+!isLoopbackTarget
+  ? ok('the release build does not target loopback')
+  : bad('the release build does not target loopback', `${configuredApi} is unreachable from a device`);
+
+/^https:\/\//.test(configuredApi)
+  ? ok('the release build targets https')
+  : bad('the release build targets https', configuredApi);
+
+// The resolver must exist and handle the Android emulator alias, which is the
+// difference between "works in a simulator" and "works in an emulator".
+const configSource = readFileSync(path.join(mobileDir, 'src', 'lib', 'config.ts'), 'utf8');
+/10\.0\.2\.2/.test(configSource)
+  ? ok('the resolver maps Android emulators to their host alias', '10.0.2.2')
+  : bad('the resolver maps Android emulators to their host alias');
+
+/OVERRIDE_KEY|mm:apiOverride/.test(configSource)
+  ? ok('a per-device override is supported')
+  : bad('a per-device override is supported');
+
+/configureApi/.test(configSource)
+  ? ok('the resolver is applied before the first request')
+  : bad('the resolver is applied before the first request');
+
+// The API client must resolve per call, or a changed override has no effect until
+// the app restarts.
+const apiSource = readFileSync(path.join(mobileDir, 'src', 'lib', 'api.ts'), 'utf8');
+/apiBase\(\)/.test(apiSource)
+  ? ok('the API client resolves the host per request')
+  : bad('the API client resolves the host per request');
+
+/**
+ * The API client and session store must not pin a loopback gateway.
+ *
+ * `config.ts` legitimately contains one: it is the DEVELOPMENT default, translated
+ * per platform. Asserting its absence there would forbid the very fallback that
+ * makes a simulator work — the first version of this check did exactly that.
+ */
+const pinnedLoopback = ['src/lib/api.ts', 'src/store/session.ts'].filter((file) =>
+  /127\.0\.0\.1:4317/.test(readFileSync(path.join(mobileDir, file), 'utf8')),
+);
+pinnedLoopback.length === 0
+  ? ok('no client pins a loopback gateway')
+  : bad('no client pins a loopback gateway', pinnedLoopback.join(', '));
+
+// ...and where it does appear, it must be platform-aware rather than fixed.
+const loopbackIsPlatformAware = /loopbackFor\s*\(/.test(configSource) && /Platform\.OS/.test(configSource);
+loopbackIsPlatformAware
+  ? ok('the development fallback is platform-aware, not fixed')
+  : bad('the development fallback is platform-aware, not fixed');
+
 /* ── 3. Native bundles ─────────────────────────────────────────────────── */
 section('3. Native bundles (iOS + Android)');
 

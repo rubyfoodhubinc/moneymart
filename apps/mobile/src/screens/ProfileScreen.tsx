@@ -3,13 +3,14 @@
  * Public profile summary, private dashboard (30-day earnings), wallet snapshot,
  * orders, watchlist and the demo identity switcher.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Image,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -44,6 +45,7 @@ import { useEarnings, useNotifications, useOrders, useStreams, useWallet } from 
 import { formatAge, formatMoney, formatViewers, pct } from '@/lib/format';
 import { colors } from '@/theme';
 import { useSession } from '@/store/session';
+import { apiBase, getApiOverride, setApiOverride, isLoopback } from '@/lib/config';
 import { MONETIZATION } from '@moneymart/tokens';
 
 export default function ProfileScreen({ navigation }: { navigation: any }) {
@@ -60,6 +62,20 @@ export default function ProfileScreen({ navigation }: { navigation: any }) {
   const streams = useStreams();
 
   const [refreshing, setRefreshing] = useState(false);
+  /**
+   * The gateway field.
+   *
+   * Seeded from the persisted override, so the panel shows what is actually in use
+   * rather than an empty box the user has to guess at.
+   */
+  const [gateway, setGateway] = useState<{ draft: string; notice: string | null }>({ draft: '', notice: null });
+
+  useEffect(() => {
+    void (async () => {
+      const override = await getApiOverride();
+      setGateway({ draft: override ?? apiBase(), notice: null });
+    })();
+  }, []);
   const [tab, setTab] = useState<'dashboard' | 'orders' | 'wallet'>('dashboard');
 
   const series = earnings.data?.series ?? [];
@@ -90,6 +106,69 @@ export default function ProfileScreen({ navigation }: { navigation: any }) {
             </Body>
           </Pill>
         </View>
+
+        {/*
+          Diagnostics: the gateway this device talks to.
+
+          A physical phone cannot reach the development loopback address, so without
+          a runtime override the only way to point a device at a LAN or staging
+          gateway would be to rebuild the app. Shown always, because "which server
+          is this app talking to" is the first question when anything looks wrong.
+        */}
+        <Card style={styles.identityCard}>
+          <View style={styles.row}>
+            <GlobeIcon size={14} color={colors.gold} />
+            <Body size={12} weight="semibold" color={colors.ink2} style={styles.ml8}>
+              Gateway
+            </Body>
+          </View>
+          <Data size={11} color={colors.ink3} style={styles.gatewayUrl}>
+            {gateway.draft || apiBase()}
+          </Data>
+          {isLoopback(gateway.draft || apiBase()) ? (
+            <Body size={11} color={colors.warning} style={styles.ml8}>
+              This is a loopback address. A phone cannot reach it — set your computer&apos;s LAN
+              address instead.
+            </Body>
+          ) : null}
+          <TextInput
+            value={gateway.draft}
+            onChangeText={(value) => setGateway((state) => ({ ...state, draft: value, notice: null }))}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            placeholder="https://moneymart-production.up.railway.app"
+            placeholderTextColor={colors.ink3}
+            style={styles.gatewayInput}
+          />
+          <View style={styles.row}>
+            <Button
+              label="Use this gateway"
+              variant="ghost"
+              onPress={() => {
+                void (async () => {
+                  const applied = await setApiOverride(gateway.draft);
+                  setGateway({ draft: applied, notice: 'Saved. Restart the app to reconnect.' });
+                })();
+              }}
+            />
+            <Button
+              label="Reset"
+              variant="ghost"
+              onPress={() => {
+                void (async () => {
+                  const applied = await setApiOverride(null);
+                  setGateway({ draft: applied, notice: 'Reset to the built-in gateway.' });
+                })();
+              }}
+            />
+          </View>
+          {gateway.notice ? (
+            <Body size={11} color={colors.gold} style={styles.ml8}>
+              {gateway.notice}
+            </Body>
+          ) : null}
+        </Card>
 
         {/* Identity card */}
         <Card style={styles.identityCard}>
@@ -459,6 +538,18 @@ function Shortcut({ icon, label, onPress }: { icon: React.ReactNode; label: stri
 }
 
 const styles = StyleSheet.create({
+  gatewayUrl: { marginTop: 4, marginBottom: 8 },
+  gatewayInput: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    borderRadius: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    color: colors.ink,
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  ml8: { marginLeft: 8 },
   root: { flex: 1, backgroundColor: colors.surface },
   flex1: { flex: 1 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8 },

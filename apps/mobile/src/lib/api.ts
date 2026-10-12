@@ -5,7 +5,8 @@
  * in the browser are indistinguishable to the Auction Engine.
  */
 import { io, type Socket } from 'socket.io-client';
-import Constants from 'expo-constants';
+import { apiBase } from './config';
+
 import type {
   AppNotification,
   AuctionWithRelations,
@@ -24,10 +25,16 @@ import type {
   User,
 } from '@moneymart/types';
 
-/** The API host is injected by app.json `extra.apiUrl` so a device can point at
- *  a LAN address instead of localhost. */
-export const API_URL: string =
-  (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ?? 'http://127.0.0.1:4317';
+/**
+ * The API host.
+ *
+ * Resolved per request through `apiBase()` rather than captured once at module
+ * load: a device override can change in the Diagnostics panel, and a constant
+ * would keep pointing at the old gateway until the app restarted. See
+ * `lib/config.ts` for the resolution order.
+ */
+export { apiBase as apiUrl } from './config';
+export { apiBase as API_URL } from './config';
 
 export class ApiError extends Error {
   status: number;
@@ -58,7 +65,7 @@ export function getSessionToken(): string | null {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${apiBase()}${path}`, {
     ...init,
     headers: {
       'content-type': 'application/json',
@@ -233,7 +240,7 @@ let socket: MoneyMartSocket | null = null;
 
 export function getSocket(): MoneyMartSocket {
   if (!socket) {
-    socket = io(API_URL, {
+    socket = io(apiBase(), {
       path: '/socket.io',
       transports: ['websocket'],
       reconnection: true,

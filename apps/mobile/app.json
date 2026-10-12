@@ -54,7 +54,8 @@
       "typedRoutes": false
     },
     "extra": {
-      "apiUrl": "http://127.0.0.1:4317"
+      "apiUrl": "https://moneymart-production.up.railway.app",
+      "//apiUrl": "The gateway a release build talks to. Change it here for a different environment, or at runtime from the Diagnostics panel on the device \u2014 a physical phone cannot reach 127.0.0.1, which is why this is not localhost."
     },
     "description": "MoneyMart \u2014 Bid. Stream. Win. Live creator auctions, traditional auction house sales and a verified secondary marketplace.",
     "icon": "./assets/icon.png",

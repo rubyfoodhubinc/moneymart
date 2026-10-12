@@ -15,6 +15,7 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { PublicProfile, User } from '@moneymart/types';
 import { api, getSocket, refreshSocketAuth, setSessionToken } from '@/lib/api';
+import { configureApi } from '@/lib/config';
 
 const TOKEN_KEY = 'mm:token';
 const EXPIRY_KEY = 'mm:tokenExpiry';
@@ -177,6 +178,14 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   bootstrap: async () => {
+    /**
+     * Resolve the gateway FIRST.
+     *
+     * Every request below depends on it, and a stored token must be presented to
+     * the right host or the app concludes it is signed out on every launch.
+     */
+    await configureApi();
+
     /**
      * Restore the token FIRST, then resolve it.
      *
