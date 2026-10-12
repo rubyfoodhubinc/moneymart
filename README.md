@@ -33,6 +33,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Mobile selling** | ✅ Captures real photographs — camera and gallery — into listings and the avatar |
 | **Account settings** | ✅ Preferences persist server-side; data export is a real, scoped download |
 | **Concurrency** | ✅ Overlapping bids, simultaneous settlement and closes verified consistent |
 | **Durability** | ✅ Escrow, disputes and payouts survive a restart; the loss window is measured |
@@ -40,7 +41,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **703 automated checks** across 24 suites — `pnpm verify:all` |
+| **Verification** | ✅ **709 automated checks** across 24 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -127,7 +128,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  703 passed   0 failed
+  TOTAL  709 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -568,6 +569,40 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## The mobile app could not create a listing
+
+Taking the honesty sweep to mobile after the web pass found two lies. TV was clean.
+Mobile had the worst defect of this whole session.
+
+**The sell screen's "Add photo" did not take a photo.** It *fabricated* an SVG — a
+gradient with a number in the corner — and attached that as the listing image. Two
+things were wrong and together they were fatal:
+
+1. it was not a photograph of anything, and
+2. **the API refuses SVG outright** (the round-16 validator), so every publish from
+   the app failed with `invalid_images`.
+
+> **The mobile seller flow could not create a listing at all** — and the placeholder
+> made that look like a deliberate demo rather than a fault.
+
+Nothing caught it because every suite tests the API, and **the API was behaving
+correctly**. This is the same lesson as the web settings screen, one level worse.
+
+Replaced with real capture: `expo-image-picker` for **camera and gallery**, a
+permission prompt that explains itself when refused, base64 into the data URI the API
+accepts, a MIME type normalised so the declared type matches the bytes, and a size
+check against the 3 MB raw ceiling that base64 inflates by a third.
+
+Two more in the same class: "Upload photo" on the setup screen was
+`onPress={() => undefined}` beside a hint promising *"background removal is applied
+automatically"*, and the sell hint claimed *"AI background removal"*. Both now do
+something real or say something true.
+
+**Guarded** (mobile 51 → 57): the shipped bundle must contain no inline `<svg>`
+template, the fabricated source must be gone from the sell screen, the picker calls
+must be present, and a source-wide sweep forbids any `onPress={() => undefined}` or
+copy that admits a stub.
 
 ## Account settings that actually save
 
