@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MoneyMart — Railway service configuration.
+#
+# One service serves the whole platform from a single origin:
+#   /            web SPA
+#   /tv          TV / IPTV bundle
+#   /api         REST gateway
+#   /socket.io   realtime WebSocket
+#
+# Both Docker and Nixpacks builds are supported; Dockerfile is used when the
+# builder is set to DOCKERFILE in the service settings.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# The gateway already serves /api/health; Railway restarts on a failed probe.
+healthcheckPath = "/api/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+[service]
+# The gateway is stateless apart from its in-memory store, so a single replica
+# is correct until DATABASE_URL is configured. Realtime bidding relies on one
+# process holding the Socket.IO rooms; scale only after adding the Redis adapter.
+replicas = 1

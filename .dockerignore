@@ -1,0 +1,35 @@
+# Keep the build context small and free of secrets.
+# Local TLS material contains a PRIVATE KEY and must never enter an image.
+.certs/
+node_modules/
+**/node_modules/
+.pnpm-store/
+.npm-cache/
+.npm/
+
+# Build output is produced inside the image, not copied in.
+apps/web/dist/
+apps/tv/dist/
+apps/mobile/.export/
+apps/mobile/.export-probe/
+**/dist/
+**/.turbo/
+**/*.tsbuildinfo
+
+# Repo metadata and editor noise
+.git/
+.github/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+
+# Docs and preserved work are not needed at runtime
+docs/next-web-preserved/
+*.log
+
+# Local environment files. Real configuration arrives through the platform's
+# environment variables (Railway / Vercel), documented in .env.example.
+.env
+.env.local
+.env*.local
