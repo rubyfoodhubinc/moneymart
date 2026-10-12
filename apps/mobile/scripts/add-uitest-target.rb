@@ -45,6 +45,40 @@ dir = File.join('ios', APP_NAME, TARGET_NAME)
 FileUtils.mkdir_p(dir)
 FileUtils.cp(SOURCE_TEST, File.join(dir, 'MoneyMartFlowTests.swift'))
 
+# The test PLAN carries environment for the test process. `xcodebuild test` does not
+# forward the invoking shell's environment to the test runner, so a test that needs a
+# value — the gateway URL for the sign-in flow — reads it from here.
+plan_source = File.join('uitests', 'MoneyMart.xctestplan')
+
+
+
+# ── The gateway the tests run against ─────────────────────────────────────────
+#
+# Generated rather than passed in, because `xcodebuild test` does NOT forward the
+# invoking shell's environment to the test process, and a test plan for a single value
+# changed which test bundles xcodebuild considered. A generated Swift constant is
+# compiled into the bundle, so it is always available and needs no plumbing.
+# A plain string is used rather than a string-interpolated heredoc: the Swift fallback
+# needs the characters \( which a Ruby heredoc would consume as interpolation, which is
+# how the first version produced the literal text "(ENV.fetch(...))" in the Swift source.
+gateway_source = <<~'SWIFT'
+  import Foundation
+
+  /**
+   * Where the UI tests send their own requests.
+   *
+   * Written by apps/mobile/scripts/add-uitest-target.rb. A test asks this gateway for a
+   * development code, which the app cannot fetch for itself, so both must agree on the
+   * host. Generated rather than passed in because `xcodebuild test` does not forward the
+   * invoking shell's environment to the test process.
+   */
+  enum TestGateway {
+    static let baseURL = ProcessInfo.processInfo.environment["MM_UITEST_API"] ?? "GATEWAY_PLACEHOLDER"
+    static var isConfigured: Bool { !baseURL.isEmpty }
+  }
+SWIFT
+gateway_source = gateway_source.sub('GATEWAY_PLACEHOLDER', ENV.fetch('MM_UITEST_API', 'http://127.0.0.1:4317'))
+File.write(File.join(dir, 'TestGateway.swift'), gateway_source)
 
 # ── The target ────────────────────────────────────────────────────────────────
 test_target = existing || project.new_target(:ui_test_bundle, TARGET_NAME, :ios, deployment_target)
@@ -76,9 +110,9 @@ group.set_source_tree('SOURCE_ROOT')
 group.set_path(File.join(APP_NAME, TARGET_NAME))
 
 # Add the Swift file only if the target does not already compile it.
-already = test_target.source_build_phase.files.any? { |f| f.display_name.to_s.include?('MoneyMartFlowTests') }
-unless already
-  file_ref = group.new_reference(File.join(APP_NAME, TARGET_NAME, 'MoneyMartFlowTests.swift'))
+%w[MoneyMartFlowTests.swift TestGateway.swift].each do |name|
+  next if test_target.source_build_phase.files.any? { |f| f.display_name.to_s.include?(name) }
+  file_ref = group.new_reference(File.join(APP_NAME, TARGET_NAME, name))
   file_ref.set_source_tree('SOURCE_ROOT')
   test_target.add_file_references([file_ref])
 end
@@ -88,6 +122,8 @@ scheme = Xcodeproj::XCScheme.new
 scheme.add_build_target(app)
 scheme.add_test_target(test_target)
 scheme.set_launch_target(app)
+
+scheme.test_action.should_use_launch_scheme_args_env = false
 scheme.save_as(PROJECT, TARGET_NAME, true)
 
 project.save
