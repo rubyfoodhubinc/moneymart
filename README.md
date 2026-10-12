@@ -44,7 +44,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **760 automated checks** across 25 suites — `pnpm verify:all` |
+| **Verification** | ✅ **760 checks** / 25 suites locally, **623** in CI, plus a passing XCUITest |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -685,6 +685,58 @@ All fixed in the scripts that exist to fix them:
   `../lightningcss.darwin-arm64.node`
 
 Full audit green in the new layout: **735 passed, 0 failed.**
+
+## Driving the mobile app with a real UI test
+
+Every previous check on the mobile app was **structural** (the bundle contains a screen)
+or **visual** (a screenshot shows one). Neither exercises a tap. `simctl` has no tap
+command and this simulator is headless, so **XCUITest was the only route left** — and it
+needed a test target, which did not exist.
+
+| Artifact | Purpose |
+|---|---|
+| `apps/mobile/scripts/add-uitest-target.rb` | creates the `MoneyMartUITests` bundle and a shared scheme |
+| `apps/mobile/uitests/MoneyMartFlowTests.swift` | the flows themselves |
+
+The script lives in the repo and installs the Swift file into the generated `ios/`
+directory, because `ios/` is gitignored: **a test written only inside it would be
+destroyed by the next `expo prebuild`** — the same trap the scene-lifecycle plugin exists
+to avoid. Verified by deleting `ios/` and regenerating.
+
+### It passes
+
+`testOnboardingAdvancesToSignIn` drives the welcome carousel, advances it, continues
+through country selection, and asserts that sign-in renders. **That is the first time a
+tap has been delivered to this app by anything other than a person.**
+
+### And it found a real accessibility defect
+
+The first runs failed with *"the element never appeared"* against a screen that had
+rendered perfectly. Dumping the accessibility tree showed why: the Button component set
+`accessibilityRole="button"` but **no label** — so every button in the app announced only
+its role. **A screen reader read "button" with no indication of what it does.** Buttons
+now carry their visible label as the accessible name, plus disabled/busy state.
+
+Three mistakes of mine, recorded:
+
+- Queries filtered on `isHittable`. The app is a horizontal carousel, so slides two and
+  three sit at x≈428 and x≈830 — **present in the tree, not hittable** — and every query
+  returned nothing.
+- The sign-in assertion *guessed* labels ("Continue with email", "Send code") instead of
+  using the screen's own copy ("Welcome back", "Sign in").
+- A patch left an extra closing brace, failing the Swift compile.
+
+**Honest limit:** `testAppShowsContentSignedOut` does not yet pass — it reaches the
+country screen but not the feed, so signed-out browsing and everything beyond sign-in
+(sign-in itself, bidding, the sell flow) remain unverified by tap.
+
+### A CI regression this caused, and its fix
+
+Adding self-hosted media made the HLS suite launch a server **and** a browser, and it
+then failed the release gate with *"connected to the browser DevTools endpoint"* — the
+suite passed locally and failed only on CI. The Linux runner has no usable sandbox, so
+Chrome died before opening its debugging port. Fixed with `--no-sandbox` and
+`--disable-dev-shm-usage`; CI went from **588 passed / 18 failed** to **623 / 0**.
 
 ## Mobile playback proved, and a badge that cried wolf
 
