@@ -754,6 +754,44 @@ Three mistakes of mine, recorded:
 
 Both are fixed: settings are applied on every run, and the file is re-synced and compared.
 
+### Profile setup trapped the user — the second defect the UI test found
+
+"Enter MoneyMart", the control that finishes setup and enters the app, **did not leave the
+screen**. Two causes, both real:
+
+1. **A failed profile save returned without continuing.** The user was left on a setup
+   screen they had finished, with the account already created and every field optional.
+   Setup was never meant to be a gate; it behaved like one. It now **reports the failure
+   and continues**, so the loss is visible but not trapping.
+2. **The busy state was on the wrong control.** `loading={saving}` sat on the *photo
+   picker*, which saves nothing, while the button that calls the API had none — a slow
+   save showed no feedback where the user was looking.
+
+Verified by driving the whole journey against a local gateway, ending in `** TEST
+SUCCEEDED **`:
+
+```
+Type 'ada@moneymart.app' into "you@example.com"
+Tap "Sign in"                    ← passwordless submit, fixed the round before
+Type '260544' into "000000"      ← the code field
+Tap "Verify code"
+Tap "Enter MoneyMart"            ← now leaves the screen
+→ the signed-in feed renders with its lots
+```
+
+### A finding I am NOT fixing, and why it matters
+
+Opening a lot card and reaching a bid control **did not work**, and the reason is not the
+test's query: **the feed's cards expose no accessibility element a query can address.** One
+attempt "opened a lot" that was actually the HOME tab, because the first hittable button on
+that screen is the tab bar.
+
+That is a **genuine accessibility defect**, not a testing inconvenience: a lot card that
+announces nothing is **unusable with a screen reader**. The fix belongs in the card
+component — a label built from the lot's title and price — which is a product change, not a
+test change. It is recorded in the test file where the dead helper used to be, and the test
+asserts only what is verified.
+
 ### The defect the UI test was built for: sign-in was unreachable
 
 `AuthScreen` disabled its submit button unless **both** a valid email and an 8-character
