@@ -33,7 +33,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
-| **Stream room** | ✅ Real HLS served from `/media`; web plays it (mobile player still pending) |
+| **Stream room** | ✅ Real HLS on **web, TV and mobile** — every surface has a player |
 | **Mobile native build** | ✅ **Runs on an iOS 27 simulator** — the full UI renders, verified by screenshot |
 | **Mobile photos** | ✅ Picker-to-API conversion verified against the real validator; camera/library needs a device |
 | **Mobile selling** | ✅ Captures real photographs — camera and gallery — into listings and the avatar |
@@ -44,7 +44,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **751 automated checks** across 25 suites — `pnpm verify:all` |
+| **Verification** | ✅ **754 automated checks** across 25 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -685,6 +685,40 @@ All fixed in the scripts that exist to fix them:
   `../lightningcss.darwin-arm64.node`
 
 Full audit green in the new layout: **735 passed, 0 failed.**
+
+## The mobile stream room had no player, and live rooms were called "ended"
+
+Both found by getting the app on screen and looking at it.
+
+### 1. No video player on mobile
+
+`StreamScreen` rendered the lot's poster inside an `Image`. The `playback` object the
+server resolves — the same one web and TV consume — **was never used**, so the room
+could only ever show a still while the other surfaces played video.
+
+`components/HlsVideo.tsx` renders the resolved manifest with **expo-video `~2.2.2`**,
+the version SDK 53 pairs with, read from expo's own `bundledNativeModules.json` rather
+than guessed. The poster stays the fallback in both cases that matter — no playable
+source, and a manifest that fails to load — because a black rectangle tells the viewer
+nothing. The source label shows either way: a branded demo loop is not a broadcast.
+
+Verified on a booted iPhone 18 Pro, iOS 27: native build succeeded with the new module
+(1055 compile steps, 0 errors), bundle grew **1351 → 1415 modules**, and the app runs
+against production showing real data.
+
+### 2. Live rooms labelled "Stream ended"
+
+The stream card's fallback — for a room with no lot on the block — knew only
+`scheduled`, else *"Stream ended"*. So a room that is genuinely **LIVE between lots**
+was announced as over while the badge above it said LIVE. The card contradicted
+itself, and **four of the five seeded rooms** are in exactly that state, so the feed
+told users nearly every live room had finished.
+
+The same string lived in **three files across two surfaces** (mobile once, web twice).
+All now test `status === 'live'` first and say *"Live now — next lot coming up"*.
+
+Guarded on **both** feeds' sources, because a single-surface test would have missed
+the other two occurrences. UI suite 42 → 45.
 
 ## Real HLS in the stream room
 
