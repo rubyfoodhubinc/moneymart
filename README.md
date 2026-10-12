@@ -25,9 +25,9 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Memberships** | ✅ RevenueCat entitlements — Pro pricing 10%/15% enforced server-side |
 | **Live video** | ✅ Real HLS in the stream room — proven decoding in headless Chrome |
 | **Studio** | ✅ Drag-to-reorder sections + seller photo reordering (§5.2) |
-| **Authentication** | ✅ Passwordless OTP — verified end to end in production |
+| **Authentication** | ✅ Passwordless OTP — wired through web, mobile **and** TV, verified in a real browser |
 | **Persistence** | ✅ Postgres snapshotting — data survives redeploys (proven in production) |
-| **Verification** | ✅ **326 automated checks** across 12 suites — `pnpm verify:all` |
+| **Verification** | ✅ **341 automated checks** across 12 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -106,15 +106,15 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  TV / IPTV (§7)                         35 passed
   PASS  Payments & membership                  35 passed
   PASS  Authentication                         48 passed
-  PASS  Persistence                            20 passed
-  PASS  Browser UI (real Chrome)               22 passed
+  PASS  Persistence                            21 passed
+  PASS  Browser UI (real Chrome)               36 passed
   PASS  HLS playback (real browser)            29 passed
   PASS  Payments & membership                  35 passed
   PASS  Mobile (native build)                   42 passed
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  326 passed   0 failed
+  TOTAL  341 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -307,6 +307,32 @@ Delivery is honest about its own limits. With no provider configured the code is
 logged and the response says `transport: "log"`; it is never silently dropped,
 because a login that cannot be completed must fail loudly rather than appear to
 succeed. Twilio Verify handles phone, Resend handles email.
+
+### Client integration
+
+Both clients use the real flow. Three details that are easy to get wrong:
+
+- **The web token lives in its own module** (`lib/token.ts`) so `lib/api.ts` can
+  read it without importing the Zustand store, which itself calls the API.
+  Sharing the store would be a cycle, and that failure mode is an `undefined`
+  binding at module evaluation rather than a build error.
+- **A 401 clears the token**, so the UI drops to signed-out instead of retrying a
+  dead credential forever.
+- **Mobile restores the token *before* the session check.** `refresh` asks the
+  server who the token belongs to, so restoring it afterwards sends an anonymous
+  request and concludes the user is signed out — on every single launch. That bug
+  only shows up on a real device.
+
+`GET /api/session` resolves the bearer token and answers **401 when nothing
+resolves**, which is what lets a client distinguish *signed out* from *signed in
+as nobody*. It previously always answered 200 with whatever the store held.
+
+Two dishonest behaviours were removed rather than left in place:
+
+- The mobile SSO buttons signed the user in as a hard-coded demo account — a
+  **fabricated identity assertion**, not authentication. Now disabled and labelled.
+- Studio's signed-out gate offered the development switcher. It now performs a
+  real sign-in.
 
 ### Three production bypasses, closed
 
