@@ -46,6 +46,11 @@ const SUITES = [
     detail: 'OTP flow, canonicalisation, refusals, code hygiene, production posture',
   },
   {
+    name: 'Object-level authorization',
+    script: 'verify-authorization.mjs',
+    detail: 'orders private to participants, storefront writes owner-scoped, public stays public',
+  },
+  {
     name: 'Ingress rate limiting',
     script: 'verify-rate-limit.mjs',
     detail: 'OTP flood, IP rotation, sliding windows, dev controls refused in production',

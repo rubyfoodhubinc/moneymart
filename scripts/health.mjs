@@ -129,9 +129,15 @@ const shop = await get(`${API}/api/storefronts/adaluxe`);
 if (shop.status === 200 && shop.json?.storefront) {
   const doc = shop.json.storefront;
   ok('storefront reads', `"${doc.name}" · ${doc.blocks.length} blocks`);
+  /**
+   * The storefront being written must be the CALLER's — a handle in the body is
+   * no longer authorization, because it previously let any signed-in user
+   * overwrite any creator's shop. The demo header identifies the owner here; the
+   * handle is still sent so the request is refused if it ever points elsewhere.
+   */
   const save = await fetch(`${API}/api/storefronts`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-mm-user': 'usr_ada' },
     body: JSON.stringify({ handle: 'adaluxe', storefront: { ...doc, tagline: doc.tagline || 'Bid. Stream. Win.' } }),
   }).catch(() => null);
   save && save.ok ? ok('storefront writes (Studio publish)') : bad('storefront writes (Studio publish)');

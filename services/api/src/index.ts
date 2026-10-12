@@ -15,6 +15,7 @@ import type {
   AuctionWithRelations,
   ClientToServerEvents,
   Item,
+  Order,
   PublicProfile,
   ServerToClientEvents,
   Storefront,
@@ -397,6 +398,37 @@ function actorId(req: Request, explicit?: string): string {
  * demo header, so a client with a stale token learns it must sign in again
  * instead of quietly acting as somebody else.
  */
+/**
+ * Guard an order-scoped route.
+ *
+ * Order routes loaded the order by id and answered with it, so ANY authenticated
+ * caller could read any order — buyer and seller ids, the total, the delivery
+ * address and the tracking number — simply by knowing or guessing an id. That is
+ * a straightforward IDOR, and an id is not a secret: it appears in URLs, in
+ * notifications and in support conversations.
+ *
+ * Returns the order when the caller is the buyer or the seller, otherwise
+ * responds and returns null. A 404 is used rather than 403 for a non-participant
+ * so the endpoint does not confirm that an order id exists.
+ */
+function requireOrderParticipant(
+  req: Request,
+  res: Response,
+  orderId: string,
+): Order | null {
+  const order = orders.get(orderId);
+  if (!order) {
+    res.status(404).json({ error: 'order_not_found' });
+    return null;
+  }
+  const actor = actorId(req);
+  if (!actor || (actor !== order.buyerId && actor !== order.sellerId)) {
+    res.status(404).json({ error: 'order_not_found' });
+    return null;
+  }
+  return order;
+}
+
 /* ── REST: authentication (§9.1 Auth Service) ──────────────────────────────
    Passwordless: a one-time code proves control of an email address or phone
    number, and possession of that identifier IS the account. There is no
@@ -975,11 +1007,8 @@ app.get('/api/orders', (req, res) => {
 });
 
 app.get('/api/orders/:id', (req, res) => {
-  const order = orders.get(req.params.id);
-  if (!order) {
-    res.status(404).json({ error: 'order_not_found' });
-    return;
-  }
+  const order = requireOrderParticipant(req, res, req.params.id);
+  if (!order) return;
   res.json({
     order,
     auction: expandAuction(order.auctionId),
@@ -989,9 +1018,16 @@ app.get('/api/orders/:id', (req, res) => {
 });
 
 app.post('/api/orders/:id/status', (req, res) => {
-  const order = orders.get(req.params.id);
-  if (!order) {
-    res.status(404).json({ error: 'order_not_found' });
+  const order = requireOrderParticipant(req, res, req.params.id);
+  if (!order) return;
+
+  /**
+   * Fulfilment is the SELLER's action. A buyer marking their own order shipped
+   * would defeat the escrow guarantee, since release depends on the seller having
+   * dispatched the item.
+   */
+  if (actorId(req) !== order.sellerId) {
+    res.status(403).json({ error: 'not_the_seller', detail: 'Only the seller may update fulfilment.' });
     return;
   }
   const { orderStatus, trackingNumber, courierName } = req.body as {
@@ -1324,11 +1360,8 @@ app.get('/api/escrow', (_req, res) => {
 });
 
 app.get('/api/orders/:id/escrow', (req, res) => {
-  const order = orders.get(req.params.id);
-  if (!order) {
-    res.status(404).json({ error: 'order_not_found' });
-    return;
-  }
+  const order = requireOrderParticipant(req, res, req.params.id);
+  if (!order) return;
   const record = escrow.get(order.id);
   if (!record) {
     res.status(404).json({ error: 'escrow_not_found' });
@@ -1676,16 +1709,34 @@ app.get('/api/storefronts/:handle', (req, res) => {
 /** Studio save — creates or updates the caller's storefront document. */
 app.put('/api/storefronts', (req, res) => {
   const body = req.body as { storefront?: Record<string, unknown>; handle?: string };
-  const handle = body.handle ?? users.get(actorId(req))?.handle;
-  if (!handle) {
-    res.status(400).json({ error: 'handle_required' });
-    return;
-  }
-  const owner = users.findByHandle(handle);
+
+  /**
+   * The storefront being written is the CALLER's, always.
+   *
+   * This previously took the handle from the request body and saved against it,
+   * so any authenticated user could overwrite any creator's shop by naming their
+   * handle — demonstrated by renaming another account's storefront from an
+   * unrelated session. A handle is public information, so it can never be the
+   * authorization for a write.
+   *
+   * An explicit, mismatched handle is refused rather than ignored, so a client
+   * that believes it is editing someone else's shop finds out instead of silently
+   * editing its own.
+   */
+  const actor = actorId(req);
+  const owner = users.get(actor);
   if (!owner) {
-    res.status(404).json({ error: 'owner_not_found' });
+    res.status(401).json({ error: 'not_authenticated' });
     return;
   }
+  if (body.handle && body.handle !== owner.handle) {
+    res.status(403).json({
+      error: 'not_your_storefront',
+      detail: 'A storefront can only be saved by its owner.',
+    });
+    return;
+  }
+  const handle = owner.handle;
   const incoming = (body.storefront ?? {}) as Record<string, unknown>;
   const base = store.storefronts.get(handle) ?? storefrontSeed(owner.id);
   const saved = store.storefronts.save({
