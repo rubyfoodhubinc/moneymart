@@ -30,7 +30,8 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Authorization** | ✅ Object-level checks — orders private to participants, storefront writes owner-scoped |
 | **Rate limiting** | ✅ Ingress limits on the message-sending and write paths |
 | **CI** | ✅ Green on GitHub — 345 checks over 13 suites on every push |
-| **Verification** | ✅ **423 automated checks** across 16 suites — `pnpm verify:all` |
+| **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Verification** | ✅ **444 automated checks** across 17 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -117,7 +118,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  423 passed   0 failed
+  TOTAL  444 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -129,6 +130,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
+pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
 pnpm verify:images     # SVG/script refusal, type sniffing, count and size bounds (20)
 pnpm verify:authorization  # order privacy, storefront ownership, id guessing (24)
 pnpm verify:rate-limit # OTP flood, IP rotation, dev controls in production (19)
@@ -406,6 +408,34 @@ auth: {"demoHeader": false}
 Sessions are held in memory and deliberately **not** snapshotted: a snapshot is a
 durable document that gets copied around, and bearer tokens do not belong in one.
 Restarting drops sessions, which is the safe direction to fail.
+
+## The deployed product, verified
+
+Every other suite checks the API, local builds, or the dev servers. None of that
+proves React mounted, the bundles executed, or the client could reach its gateway
+from a different origin — and *"28 API checks pass"* is not the claim *"the app
+works for a customer"*.
+
+`pnpm verify:production-app` loads the **live deployment** in a real browser and
+asserts the product itself:
+
+```
+✔ the app mounted into #root            4 child element(s)
+✔ the rendered markup is substantive    80951 chars
+✔ the browser can fetch the gateway across origins   7 lots · 4 streams
+✔ /live, /auctions, /marketplace, /creators all render real data
+✔ a deep-linked lot renders its own content          matched "Rolex"
+✔ the TV app mounts from its own namespaced bundle
+✔ HSTS + nosniff sent · dev controls refused (403)
+```
+
+The cross-origin check matters most: **CORS failure is invisible to every
+API-side test**, because a test process is not subject to it.
+
+Read-only — it never bids, buys or signs in — so it is safe against production at
+any time. It runs in CI as a **non-blocking** step, because it tests a live host
+the workflow does not deploy; a provider-side blip must not fail a code check,
+but a real product regression stays visible.
 
 ## Continuous integration
 
