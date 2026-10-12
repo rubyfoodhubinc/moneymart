@@ -20,7 +20,7 @@ import {
   Toast,
   ToastStack,
 } from '@/components/ui';
-import { CheckIcon, GavelIcon, TrendIcon, TruckIcon, UsersIcon } from '@/components/icons';
+import { CheckIcon, GavelIcon, TrendIcon, TruckIcon } from '@/components/icons';
 import { api } from '@/lib/api';
 import { EscrowPanel } from '@/components/escrow';
 import { useOrders } from '@/lib/hooks';
@@ -175,9 +175,24 @@ export default function OrdersPage() {
                         Mark {nextStatus}
                       </Button>
                     ) : (
-                      <Button size="sm" variant="navy" icon={<UsersIcon size={13} />} onClick={() => setMessage(`Message thread with ${other?.displayName} opens here.`)}>
-                        Message
-                      </Button>
+                      /**
+                       * No action the product cannot actually perform.
+                       *
+                       * This slot held a "Message" button that only raised a toast
+                       * reading "Message thread with X opens here." There is no messaging
+                       * endpoint anywhere in the API, so it promised a feature and
+                       * delivered a sentence. An affordance that does nothing is worse
+                       * than no affordance: it teaches the user that the buttons here
+                       * are decoration.
+                       *
+                       * The seller's real next step once fulfilment is done is to check
+                       * the payout, so that is what is offered instead.
+                       */
+                      <Link to="/account/wallet">
+                        <Button size="sm" variant="ghost" icon={<TrendIcon size={13} />}>
+                          View payout
+                        </Button>
+                      </Link>
                     )}
                   </div>
                 </div>

@@ -652,6 +652,45 @@ if (signIn.token) {
 }
 
 /* ── 5. Sell flow photo drag ───────────────────────────────────────────── */
+/* ── 4b. No affordance is a dead end ───────────────────────────────────── */
+
+/**
+ * A button that only raises a toast promising a feature is worse than no button:
+ * it teaches the user that the controls are decoration. The orders page carried
+ * exactly that — a "Message" button whose handler printed "Message thread with X
+ * opens here." against an API with no messaging endpoint at all.
+ *
+ * This sweeps the rendered text of every route for copy that admits a stub.
+ */
+section('4b. No affordance promises what the product cannot do');
+
+const stubPatterns = [
+  /opens here/i,
+  /coming soon/i,
+  /will open/i,
+  /would open/i,
+  /not yet (available|implemented)/i,
+  /planned for/i,
+];
+
+const routesToSweep = ['/', '/auctions', '/auctions/auc_rolex', '/marketplace', '/creators', '/account/orders', '/account/wallet'];
+const stubsFound = [];
+
+for (const route of routesToSweep) {
+  await goto(route);
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const text = await evaluate('document.body.innerText || ""');
+  for (const pattern of stubPatterns) {
+    const hit = String(text).match(pattern);
+    if (hit) stubsFound.push(`${route}: "${hit[0]}"`);
+  }
+}
+
+stubsFound.length === 0
+  ? ok('no route renders copy that admits an unimplemented feature', `${routesToSweep.length} routes`)
+  : bad('no route renders copy that admits an unimplemented feature', stubsFound.slice(0, 3).join(' | '));
+
+
 section('5. Sell flow photo reordering');
 
 await goto('/sell');
