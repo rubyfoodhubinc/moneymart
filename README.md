@@ -33,7 +33,8 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
-| **Verification** | ✅ **527 automated checks** across 19 suites — `pnpm verify:all` |
+| **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
+| **Verification** | ✅ **536 automated checks** across 19 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -120,7 +121,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  527 passed   0 failed
+  TOTAL  536 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
