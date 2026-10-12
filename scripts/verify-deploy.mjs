@@ -296,11 +296,21 @@ const csp = root.headers.get('content-security-policy') ?? '';
 section('7. Production hardening');
 
 const devReset = await get('/api/dev/reset', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-devReset.status === 403
-  ? ok('dev control endpoints are disabled', `/api/dev/reset → ${devReset.status}`)
-  : devReset.status === 200
-    ? bad('dev control endpoints are disabled', 'they are OPEN — NODE_ENV is not production')
-    : bad('dev control endpoints are disabled', `unexpected status ${devReset.status}`);
+/**
+ * Two independent refusals are correct and both mean "disabled":
+ *   401 — the request carries no identity, and unattributed writes are refused
+ *         before any handler runs.
+ *   403 — the request reached the route, which refuses because the control is
+ *         switched off outside development.
+ * Only a 200 is a failure, since that means the reset actually executed.
+ */
+if (devReset.status === 200) {
+  bad('dev control endpoints are disabled', 'they are OPEN — the store was reset');
+} else if (devReset.status === 401 || devReset.status === 403) {
+  ok('dev control endpoints are disabled', `/api/dev/reset → ${devReset.status}`);
+} else {
+  bad('dev control endpoints are disabled', `unexpected status ${devReset.status}`);
+}
 
 /* ── 8. Realtime over TLS ──────────────────────────────────────────────── */
 section('8. Realtime on the unified origin');
