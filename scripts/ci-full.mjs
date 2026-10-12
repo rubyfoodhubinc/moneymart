@@ -53,6 +53,7 @@ const API_SUITES = [
   'verify-subscriptions.mjs',
   'verify-lifecycle.mjs',
   'verify-dispute.mjs',
+  'verify-restart.mjs',
 ];
 
 /**

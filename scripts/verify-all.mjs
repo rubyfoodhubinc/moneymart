@@ -51,6 +51,11 @@ const SUITES = [
     detail: 'list → bid → settle → pay → escrow → ship → release → books balance',
   },
   {
+    name: 'Restart with money in flight',
+    script: 'verify-restart.mjs',
+    detail: 'escrow, disputes and payouts survive a restart; the durability window is measured',
+  },
+  {
     name: 'Dispute and refund',
     script: 'verify-dispute.mjs',
     detail: 'admin-only resolution, refund returns funds, seller-favourable release, no double-resolve',
