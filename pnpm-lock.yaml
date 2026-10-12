@@ -117,6 +117,9 @@ importers:
       '@moneymart/types':
         specifier: workspace:*
         version: link:../../packages/types
+      hls.js:
+        specifier: ^1.7.3
+        version: 1.7.3
       react:
         specifier: ^19.0.0
         version: 19.0.0
@@ -163,6 +166,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.64.1
         version: 5.104.1(react@19.3.0)
+      hls.js:
+        specifier: ^1.7.3
+        version: 1.7.3
       react:
         specifier: ^19.0.0
         version: 19.3.0
@@ -2542,6 +2548,9 @@ packages:
 
   hermes-parser@0.29.1:
     resolution: {integrity: sha512-xBHWmUtRC5e/UL0tI7Ivt2riA/YBq9+SiYFU7C1oBa/j2jYGlIF9043oak1F47ihuDIxQ5nbsKueYJDRY02UgA==}
+
+  hls.js@1.7.3:
+    resolution: {integrity: sha512-MsPlx6yVW4Qv4C7mEVou4/gk/5cN2dVxOTnrNjPSmyH2f0Ln+/UkG10Ax1PE6OvrmTVPKgQYozTtBaPOuCzq7A==}
 
   hoist-non-react-statics@3.3.2:
     resolution: {integrity: sha512-/gGivxi8JPKWNm/W0jSmzcMPpfpPLc3dY/6GxhX2hQ9iGj3aDfklV4ET7NjKpSinLpJ5vafa9iiGIEZg10SfBw==}
@@ -6682,6 +6691,8 @@ snapshots:
   hermes-parser@0.29.1:
     dependencies:
       hermes-estree: 0.29.1
+
+  hls.js@1.7.3: {}
 
   hoist-non-react-statics@3.3.2:
     dependencies:

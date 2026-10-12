@@ -14,6 +14,7 @@ import type { AuctionWithRelations, ChatMessage, StreamWithRelations } from '@mo
 import { api, type TvHandoff } from '@/lib/api';
 import { useFocus, useFocusable } from '@/lib/focus';
 import { TvButton, TvCountdown, TvPill, TvQrCode } from '@/components/tv';
+import { TvHlsPlayer } from '@/components/TvHlsPlayer';
 import { formatMoney, formatViewers, minimumNextBid } from '@/lib/format';
 
 const CONTROLS_HIDE_MS = 5000; // §7.2 TV controls auto-hide
@@ -120,22 +121,23 @@ export function TvStreamScreen({ streamId, onBack }: { streamId: string; onBack:
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#04080d' }}>
-      {/* 16:9 full-screen video surface */}
-      <div style={{ position: 'absolute', inset: 0 }}>
-        <img
-          src={activeAuction?.item.images[0] ?? stream?.posterUrl ?? ''}
-          alt=""
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-        />
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background:
-              'linear-gradient(180deg, rgba(7,15,24,0.75) 0%, rgba(7,15,24,0.05) 30%, rgba(7,15,24,0.9) 100%)',
-          }}
-        />
-      </div>
+      {/* 16:9 full-screen HLS video surface. The API resolves the source and
+          reports whether it is a real broadcast, a demo manifest or offline. */}
+      <TvHlsPlayer
+        src={stream?.playback?.url}
+        poster={activeAuction?.item.images[0] ?? stream?.posterUrl}
+        mode={stream?.playback?.mode ?? (stream?.status === 'live' ? 'demo' : 'offline')}
+        label={stream?.playback?.label}
+      />
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          background:
+            'linear-gradient(180deg, rgba(7,15,24,0.75) 0%, rgba(7,15,24,0.05) 30%, rgba(7,15,24,0.9) 100%)',
+        }}
+      />
 
       {/* Overlay chrome — hides after inactivity */}
       <div

@@ -754,7 +754,14 @@ export function seed(): void {
       status: seedStream.status,
       viewerCount: seedStream.viewers,
       peakViewerCount: Math.round(seedStream.viewers * 1.35),
-      hlsUrl: `https://stream.moneymart.demo/hls/${seedStream.id}/index.m3u8`,
+      /**
+       * No stored manifest for demo data. The previous value pointed at
+       * `stream.moneymart.demo`, a host that does not exist, so every room
+       * rendered a failed player. Playback is resolved server-side instead
+       * (engine/playback.ts), which labels an unresolvable source as a demo
+       * rather than handing clients a URL that cannot load.
+       */
+      hlsUrl: '',
       posterUrl: posterFor(seedStream.title, seedStream.category, seedStream.id),
       itemQueue: seedStream.queue,
       activeAuctionId: isLive ? seedStream.queue[0] : undefined,

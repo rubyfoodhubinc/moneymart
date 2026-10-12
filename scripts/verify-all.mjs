@@ -41,6 +41,16 @@ const SUITES = [
     detail: 'rails, authorisation, hold, release-on-confirmation, decline, dispute, refund',
   },
   {
+    name: 'HLS playback (real browser)',
+    script: 'verify-hls.mjs',
+    detail: 'Chrome drives the shipped hls.js bundle and reports what actually decoded',
+    /**
+     * Drives a real Chromium browser, so it is opt-in: not every environment has
+     * one, and it is slower than the other suites. `pnpm verify:hls` runs it.
+     */
+    optional: { env: 'MM_HLS_SUITE' },
+  },
+  {
     name: 'Payments & membership',
     script: 'verify-subscriptions.mjs',
     detail: 'provider registry, identity guard, entitlement lifecycle, Pro pricing',

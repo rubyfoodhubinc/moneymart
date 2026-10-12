@@ -109,6 +109,22 @@ export interface AutoBid {
 
 export type StreamStatus = 'scheduled' | 'live' | 'ended';
 
+/**
+ * What a room should actually play, resolved server-side.
+ *
+ * `mode` is deliberately explicit: a demo manifest must never be presented as a
+ * live broadcast, and an offline room must not hand a player a URL that fails.
+ */
+export type PlaybackMode = 'live' | 'demo' | 'offline';
+
+export interface StreamPlayback {
+  url?: string;
+  mode: PlaybackMode;
+  /** Human-readable source label for the player chrome. */
+  label: string;
+  updatedAt: ISODate;
+}
+
 export interface Stream {
   id: string;
   creatorId: string;
@@ -278,6 +294,8 @@ export interface PublicProfile {
 }
 
 export interface StreamWithRelations extends Stream {
+  /** Server-resolved playback source. */
+  playback?: StreamPlayback;
   creator: PublicProfile;
   activeAuction?: AuctionWithRelations;
   queuedCount: number;

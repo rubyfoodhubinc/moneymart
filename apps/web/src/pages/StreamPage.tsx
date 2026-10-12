@@ -52,6 +52,7 @@ import {
 import { useAuctionRoom, useAutoBid, usePlaceBid, useSendChat, useStreamDetail, useStreamRoom, useWatchlist } from '@/lib/hooks';
 import { useQuery } from '@tanstack/react-query';
 import { api, queryKeys } from '@/lib/api';
+import { HlsPlayer } from '@/components/HlsPlayer';
 import { getSocket } from '@/lib/socket';
 import { formatMoney, formatViewers, minimumNextBid } from '@/lib/format';
 import { useSession } from '@/store/session';
@@ -226,10 +227,14 @@ export default function StreamPage() {
         <div className="flex flex-col gap-5">
           <div className="card-surface relative overflow-hidden">
             <div className="relative aspect-video">
-                            <img
-                src={liveAuction?.item.images[0] ?? stream.posterUrl}
-                alt={stream.title}
-                className="h-full w-full object-cover"
+              {/* Real HLS playback. The API resolves the source and reports
+                  whether it is a live broadcast, a demo manifest or offline, so
+                  the player never presents a demo as a genuine broadcast. */}
+              <HlsPlayer
+                src={stream.playback?.url}
+                poster={liveAuction?.item.images[0] ?? stream.posterUrl}
+                mode={stream.playback?.mode ?? (stream.status === 'live' ? 'demo' : 'offline')}
+                label={stream.playback?.label}
               />
               <div
                 className="absolute inset-0"

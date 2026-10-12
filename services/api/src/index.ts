@@ -29,6 +29,7 @@ import { providerRegistry } from './engine/payments.js';
 import { qrToSvgDataUri } from './lib/qr.js';
 import { mountStaticHost } from './lib/staticHost.js';
 import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
+import { resolveStreamPlayback } from './engine/playback.js';
 import {
   auctions,
   chat,
@@ -188,6 +189,17 @@ function expandStream(streamId: string) {
     creator: publicProfile(stream.creatorId),
     activeAuction: stream.activeAuctionId ? (expandAuction(stream.activeAuctionId) ?? undefined) : undefined,
     queuedCount: stream.itemQueue.length,
+    /**
+     * Resolved here so every client (web, TV, mobile) agrees on what is playing
+     * and whether it is a real broadcast. An unresolvable stored URL becomes a
+     * labelled demo rather than a dead player.
+     */
+    playback: resolveStreamPlayback({
+      streamId: stream.id,
+      status: stream.status,
+      storedUrl: stream.hlsUrl,
+      fallbackUrl: process.env.MM_DEMO_HLS_URL,
+    }),
   };
 }
 
