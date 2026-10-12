@@ -49,7 +49,8 @@
     },
     "plugins": [
       "expo-font",
-      "expo-image-picker"
+      "expo-image-picker",
+      "./plugins/withSceneLifecycle"
     ],
     "experiments": {
       "typedRoutes": false
