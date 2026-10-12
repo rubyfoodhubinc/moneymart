@@ -33,9 +33,10 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
+| **Money path** | ✅ One end-to-end run from listing to settled payout, with the books closing |
 | **TV D-pad** | ✅ Real key-press traversal verified in a browser — focus stays visible and unique |
 | **Mobile reachability** | ✅ Gateway resolved per device, per platform — not pinned to loopback |
-| **Verification** | ✅ **542 automated checks** across 19 suites — `pnpm verify:all` |
+| **Verification** | ✅ **578 automated checks** across 20 suites — `pnpm verify:all` |
 | **TV / IPTV** (§7) | ✅ Live on http://127.0.0.1:3200 — D-pad 10-foot UI, QR bridge, XMLTV EPG |
 
 ---
@@ -122,7 +123,7 @@ MM_UI_SUITE=1 MM_HLS_SUITE=1 MM_MOBILE_SUITE=1 pnpm verify:all   # 258 — every
   PASS  Unified deployment                     28 passed
   PASS  End-to-end health                      11 passed
 ───────────────────────────────────────────────────────────────
-  TOTAL  542 passed   0 failed
+  TOTAL  578 passed   0 failed
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -134,6 +135,7 @@ pnpm verify:realtime   # Socket.IO broadcast contract (19)
 pnpm verify:escrow     # payments, escrow, disputes (31)
 pnpm verify:tv         # QR, handoff, EPG, 10-foot UI, D-pad (35)
 pnpm verify:auth       # OTP flow, canonicalisation, refusals, production posture (48)
+pnpm verify:lifecycle  # listing → bid → settle → pay → escrow → release → books (36)
 pnpm verify:delivery   # the sent code is the verified code; senders and failures (31)
 pnpm verify:oauth      # real JWKS, PKCE, state, linking, browser handoff (47)
 pnpm verify:production-app  # live deployment renders and reaches its gateway (21)
@@ -558,6 +560,46 @@ is verified (the token survives, and is erased from the address bar), but the
 **presentation** of a failed sign-in could not be confirmed reliably in headless
 Chrome, so it is deliberately **not asserted**. The security property — the token
 never lingering in the URL — is verified for both paths.
+
+## The money path, end to end
+
+Every component of commerce had a suite of its own — the auction engine, escrow
+transitions, payments, orders. **Nothing moved money from a listing to a settled
+payout in one run and checked the books at the end.** That is the difference
+between *"each part works"* and *"the product works"*, and it is exactly where an
+inconsistency between two correct-looking parts hides.
+
+```bash
+pnpm verify:lifecycle   # 36 checks: list → bid → settle → pay → escrow → ship → release → books
+```
+
+It drives the real HTTP and Socket surfaces in sequence: a seller lists, a self-bid
+is refused, the buyer bids **over the socket**, the clock runs out, settlement
+creates the order, the buyer pays, funds are held, the seller **cannot** release
+them, the seller ships, the buyer confirms, the payout releases, and the ledgers are
+cross-checked against each other — including that confirming twice does not pay
+twice.
+
+### The defect it found
+
+`/api/wallet` recomputed the seller's balance with **invented numbers** instead of
+reading the ledger:
+
+- the seller fee was hardcoded at **10%** while the settlement charges the category
+  rate (**12%** for luxury) — a **$3.00 overstatement** of the seller's balance on a
+  $150 hammer, measured
+- a buyer's spend was subtracted from the **seller's** balance as `spent * 0.15`,
+  charging a seller for their own unrelated purchases
+- `lifetimeGross` added a flat **$120 per purchase**, a figure corresponding to nothing
+- every sale was reported at a flat 10% fee in the transaction list
+
+The wallet now reports what the ledger recorded. The books close, arithmetically:
+
+```
+buyer total − seller net − shipping − tax = platform take
+$212.05      − $132.00    − $32.05        = $48.00
+                                            = buyers premium $30.00 + seller fee $18.00
+```
 
 ## TV D-pad: three defects a real key press found
 
