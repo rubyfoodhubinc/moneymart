@@ -41,6 +41,11 @@ const SUITES = [
     detail: 'rails, authorisation, hold, release-on-confirmation, decline, dispute, refund',
   },
   {
+    name: 'Authentication',
+    script: 'verify-auth.mjs',
+    detail: 'OTP flow, canonicalisation, refusals, code hygiene, production posture',
+  },
+  {
     name: 'Persistence',
     script: 'verify-persistence.mjs',
     detail: 'snapshot round-trip across a hard kill, corrupt-file recovery, opt-out',

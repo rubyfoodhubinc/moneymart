@@ -22,6 +22,7 @@ import type {
   Subscription,
   User,
 } from '@moneymart/types';
+import type { AuthChallenge, AuthSession } from './engine/auth.js';
 
 /** Bump when the snapshot shape changes incompatibly. */
 const SNAPSHOT_VERSION = 1;
@@ -55,6 +56,23 @@ export const db = {
   escrow: new Map<string, EscrowRecord>(),
   /** Membership entitlements, one per user, mirroring RevenueCat. */
   subscriptions: new Map<string, Subscription>(),
+  /**
+   * Live one-time login challenges, keyed by challenge id.
+   *
+   * Deliberately NOT snapshotted: a code is short-lived and single-use, and
+   * persisting one would let a restart resurrect a credential that was already
+   * spent.
+   */
+  authChallenges: new Map<string, AuthChallenge>(),
+  /**
+   * Issued session tokens, keyed by the token itself.
+   *
+   * Also not snapshotted, and for a stronger reason: a snapshot is a durable
+   * document that gets copied around. Storing bearer tokens in it would spread
+   * live credentials far beyond the process that issued them. Restarting drops
+   * sessions, which is the safe direction to fail.
+   */
+  authSessions: new Map<string, AuthSession>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
 };

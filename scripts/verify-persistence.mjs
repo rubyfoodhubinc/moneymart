@@ -64,7 +64,13 @@ async function start(extraEnv = {}) {
       MM_SNAPSHOT_FILE: snapshotFile,
       MM_SNAPSHOT_INTERVAL_MS: '1000',
       MM_SEED: 'true',
-      NODE_ENV: 'production',
+      /**
+       * Development, not production: this suite is about durability and the demo
+       * header it uses to create records is (correctly) refused in production.
+       * Production authorisation is asserted by verify-auth against a
+       * production-mode process.
+       */
+      NODE_ENV: 'development',
       MM_PERSISTENCE: 'on',
       ...extraEnv,
     },

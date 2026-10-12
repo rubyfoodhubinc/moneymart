@@ -30,6 +30,7 @@ import { qrToSvgDataUri } from './lib/qr.js';
 import { mountStaticHost } from './lib/staticHost.js';
 import { createPersistence, shouldSeed } from './lib/persistence.js';
 import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
+import { authService } from './engine/auth.js';
 import { resolveStreamPlayback } from './engine/playback.js';
 import {
   auctions,
@@ -260,34 +261,226 @@ function broadcast(events: EngineEvent[]): void {
 }
 
 /**
- * Resolve the acting user. Production replaces this with verified JWT claims
- * (§9.1 Auth Service); in dev the `x-mm-user` header or an explicit body field
- * selects the actor, which makes multi-user realtime flows testable.
- */
-/**
  * Resolve the acting identity.
  *
- * `x-mm-user` stands in for a real session token until auth lands. A header is
- * only honoured when it names a real user — an unknown identity must never be
- * quietly downgraded to the session default, because that would serve one
- * user's wallet, orders and pricing to a caller who merely claimed a different
- * id. `identityGuard` rejects such requests before they reach a handler; this
- * fallback exists only for requests that carry no header at all.
+ * A verified session token is the real path:
+ *
+ *   Authorization: Bearer <token>
+ *
+ * `x-mm-user` remains as a development stand-in so multi-user realtime flows can
+ * be driven without signing in repeatedly. It is honoured only outside
+ * production (or behind MM_ALLOW_DEMO_AUTH), because an unverified header that
+ * selects any account IS an authentication bypass — which is precisely the flaw
+ * this replaces. An unknown identity is never downgraded to the session default,
+ * since that would serve one user's wallet and orders to a caller who merely
+ * claimed a different id.
  */
+function bearerToken(req: Request): string | null {
+  const raw = req.header('authorization');
+  if (!raw) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(raw.trim());
+  return match ? match[1]!.trim() : null;
+}
+
 function actorId(req: Request, explicit?: string): string {
+  // 1. A verified session.
+  const token = bearerToken(req);
+  if (token) {
+    const session = authService.authenticate(token);
+    if (session) return session.userId;
+  }
+
+  // 2. An explicit body field, used by tests and admin tooling.
   if (explicit && users.get(explicit)) return explicit;
-  const header = req.header('x-mm-user');
-  if (header && users.get(header)) return header;
-  return store.db.session.userId;
+
+  // 3. The development stand-ins, refused in production.
+  if (authService.demoHeaderAllowed()) {
+    const header = req.header('x-mm-user');
+    if (header && users.get(header)) return header;
+    /**
+     * The dev session endpoint's selection.
+     *
+     * Kept INSIDE this branch deliberately. The store's `session.userId` is
+     * pre-populated by the demo seed (seed.ts sets it to the demo buyer), so
+     * returning it outside this branch made every unauthenticated request in
+     * production resolve to a real, fully-privileged account — with the wallet,
+     * orders and Pro pricing that go with it. Seeding populated an identity, and
+     * an auth fallback then trusted it.
+     */
+    return store.db.session.userId;
+  }
+
+  /**
+   * No verified identity. An empty string propagates to route handlers, which
+   * look the user up and fail closed, rather than naming an account.
+   */
+  return '';
 }
 
 /**
- * Reject requests that assert an identity which does not exist.
+ * Reject requests asserting an identity that cannot be verified.
  *
  * Applied globally rather than per route: authorisation must fail closed, and a
- * per-route check is a standing invitation to forget one.
+ * per-route check is a standing invitation to forget one. A malformed or expired
+ * bearer token is refused outright rather than silently falling through to the
+ * demo header, so a client with a stale token learns it must sign in again
+ * instead of quietly acting as somebody else.
+ */
+/* ── REST: authentication (§9.1 Auth Service) ──────────────────────────────
+   Passwordless: a one-time code proves control of an email address or phone
+   number, and possession of that identifier IS the account. There is no
+   password database to breach and no reset flow to build, and phone
+   verification — which a marketplace handling money needs anyway — falls out
+   of the same mechanism.
+   ────────────────────────────────────────────────────────────────────────*/
+
+app.post('/api/auth/request', async (req, res) => {
+  const { identifier } = req.body as { identifier?: string };
+  const result = await authService.start(String(identifier ?? ''));
+  if (!result) {
+    res.status(400).json({ error: 'invalid_identifier', detail: 'Provide an email address or phone number.' });
+    return;
+  }
+
+  /**
+   * The response deliberately does not reveal whether an account exists for the
+   * identifier — that would turn this endpoint into an account-enumeration
+   * oracle. The one thing that does vary is whether the code could be delivered,
+   * because a user staring at an empty inbox needs to know that.
+   */
+  res.json({
+    ok: true,
+    challengeId: result.challengeId,
+    kind: result.identifier.kind,
+    destination: result.identifier.destination.replace(
+      result.identifier.kind === 'email' ? /^(.).*(@.*)$/ : /^(\+?\d{0,3})\d+(\d{2})$/,
+      result.identifier.kind === 'email' ? '$1***$2' : '$1****$2',
+    ),
+    expiresInSeconds: result.expiresInSeconds,
+    delivery: {
+      delivered: result.delivery.delivered,
+      transport: result.delivery.transport,
+      ...(result.delivery.detail ? { detail: result.delivery.detail } : {}),
+    },
+    // Only populated when development exposure is enabled.
+    ...(result.devCode ? { devCode: result.devCode } : {}),
+  });
+});
+
+app.post('/api/auth/verify', (req, res) => {
+  const { identifier, code } = req.body as { identifier?: string; code?: string };
+  const result = authService.verify(String(identifier ?? ''), String(code ?? ''));
+
+  if (!result.ok) {
+    const status = result.error === 'too_many_attempts' ? 429 : result.error === 'expired' ? 410 : 401;
+    res.status(status).json({ error: result.error });
+    return;
+  }
+
+  res.json({
+    ok: true,
+    token: result.token,
+    expiresAt: new Date(result.expiresAt).toISOString(),
+    user: result.user,
+    profile: publicProfile(result.user.id),
+    /** True when the account still needs a name, handle and country. */
+    needsProfile: !result.user.displayName || result.user.verificationStatus !== 'verified',
+  });
+});
+
+/** Who the caller is, according to their token. */
+app.get('/api/auth/session', (req, res) => {
+  const token = bearerToken(req);
+  const session = token ? authService.authenticate(token) : null;
+  if (!session) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  res.json({
+    ok: true,
+    user: users.get(session.userId),
+    profile: publicProfile(session.userId),
+    session: { createdAt: new Date(session.createdAt).toISOString(), expiresAt: new Date(session.expiresAt).toISOString() },
+  });
+});
+
+app.post('/api/auth/signout', (req, res) => {
+  const token = bearerToken(req);
+  // Idempotent: signing out twice is not an error.
+  const revoked = token ? authService.signOut(token) : false;
+  res.json({ ok: true, revoked });
+});
+
+/** Active sessions for the account screen. */
+app.get('/api/auth/sessions', (req, res) => {
+  res.json({ items: authService.sessionsFor(actorId(req)) });
+});
+
+/**
+ * Identity enforcement, mounted AFTER the public and authentication routes.
+ *
+ * Position matters and is the whole reason this is not at the top of the file: a
+ * global guard placed before the auth routes intercepts the very requests that
+ * exist to obtain a token, so nobody could ever sign in. Registering it here
+ * means the routes below are the protected surface, and everything above is
+ * deliberately reachable.
  */
 app.use((req: Request, res: Response, next: NextFunction) => {
+  const token = bearerToken(req);
+  if (token && !authService.authenticate(token)) {
+    res.status(401).json({ error: 'invalid_token', detail: 'The session token is expired or unknown.' });
+    return;
+  }
+
+  if (!authService.demoHeaderAllowed()) {
+    /**
+     * Production: an identity-less write must be refused outright.
+     *
+     * Reads are public — browsing lots, health, configuration — so they are
+     * exempted by METHOD rather than by a path list, which would silently start
+     * 401-ing the moment a new public read was added. Anything that writes is
+     * attributable and therefore needs an identity.
+     *
+     * Without this a handler would look up an empty user id and answer 200 with
+     * zeros: not a leak, but a request that cannot be attributed should fail
+     * closed rather than receive a plausible-looking empty account.
+     */
+    /**
+     * Reads are public by default, because browsing lots, health and
+     * configuration must work without an account. A read that exposes a
+     * SPECIFIC account is not public, so those paths are called out — a
+     * method-only rule let an unauthenticated `GET /api/wallet` answer 200 with
+     * an empty account, which reads as a real balance of zero.
+     *
+     * Only the paths that resolve `actorId` to an account need to be listed, and
+     * the write path is covered regardless of method, so a new endpoint is
+     * private until it is deliberately made public.
+     */
+    const isPublicRead = req.method === 'GET' || req.method === 'HEAD';
+    const needsIdentity =
+      !isPublicRead ||
+      /^\/api\/(wallet|orders|notifications|selling|purchases|watchlist|addresses|payouts|subscription|auth\/session|auth\/sessions)(\/|$)/.test(
+        req.path,
+      );
+
+    /**
+     * `/api/session` is exempted because it gates ITSELF: with the demo header
+     * disabled it answers 403, which names the real reason (the control is
+     * switched off) rather than 401 (you are not signed in). Both refuse the
+     * request; the specific answer is more useful to the caller.
+     */
+    const isSelfGated = req.path === '/api/session';
+
+    if (needsIdentity && !isSelfGated && !actorId(req)) {
+      res.status(401).json({ error: 'not_authenticated', detail: 'Provide an Authorization: Bearer token.' });
+      return;
+    }
+    next();
+    return;
+  }
+
+  // Development: the demo header selects the actor, but only if it names a real
+  // user. An unknown identity is never downgraded to the session default.
   const header = req.header('x-mm-user');
   if (header && !users.get(header)) {
     res.status(401).json({ error: 'unknown_identity', detail: `No user matches x-mm-user: ${header}` });
@@ -312,6 +505,7 @@ app.get('/api/health', (_req, res) => {
      * being an assumption about its configuration.
      */
     persistence: persistence ? persistence.status().adapter : null,
+    auth: { demoHeader: authService.demoHeaderAllowed(), liveSessions: store.db.authSessions.size },
     time: store.iso(),
   });
 });
@@ -335,7 +529,18 @@ app.get('/api/session', (_req, res) => {
   res.json({ user, profile: publicProfile(store.db.session.userId) });
 });
 
+/**
+ * Switch the development identity.
+ *
+ * Explicitly gated rather than implied: this endpoint sets who subsequent
+ * requests act as, so leaving it open in production would be an account-takeover
+ * primitive.
+ */
 app.post('/api/session', (req, res) => {
+  if (!authService.demoHeaderAllowed()) {
+    res.status(403).json({ error: 'dev_controls_disabled', detail: 'The demo identity switch is disabled in production.' });
+    return;
+  }
   const { userId } = req.body as { userId?: string };
   if (userId && users.get(userId)) {
     store.db.session.userId = userId;
@@ -1574,6 +1779,18 @@ if (shouldSeed(restoredRecords)) {
 
 persistence?.start();
 
+/**
+ * Expired codes and sessions are swept on an interval. Unref'd so the timer
+ * never keeps the process alive on its own.
+ */
+const authSweep = setInterval(() => {
+  const swept = authService.sweep();
+  if (swept.challenges || swept.sessions) {
+    console.log(`[auth] swept ${swept.challenges} expired code(s), ${swept.sessions} expired session(s)`);
+  }
+}, 5 * 60 * 1000);
+authSweep.unref?.();
+
 http.listen(PORT, () => {
   const live = streams.live();
   console.log(`\n  MoneyMart API  •  Bid. Stream. Win.`);
@@ -1581,6 +1798,11 @@ http.listen(PORT, () => {
   console.log(`  Live streams: ${live.length}   Live auctions: ${auctions.active().length}   Users: ${users.all().length}`);
   console.log(`  Anti-snipe: ${ANTI_SNIPE.triggerWindowMs / 1000}s window → +${ANTI_SNIPE.extensionMs / 1000}s`);
   console.log(`  CORS allowlist: ${allowedOrigins.size} explicit origin(s), vercel previews ${process.env.MM_ALLOW_VERCEL_PREVIEWS === 'false' ? 'blocked' : 'allowed'}`);
+  console.log(
+    `  Auth: passwordless OTP — demo header ${authService.demoHeaderAllowed() ? 'ALLOWED' : 'refused'}` +
+      (authService.demoHeaderAllowed() ? (process.env.NODE_ENV === 'production' ? ' (MM_ALLOW_DEMO_AUTH=true)' : ' (non-production)') : ''),
+  );
+  console.log(`  Auth codes exposed in responses: ${process.env.MM_AUTH_DEV_CODES === 'true' || (process.env.MM_AUTH_DEV_CODES !== 'false' && process.env.NODE_ENV !== 'production') ? 'yes (development)' : 'no'}`);
   if (persistence) {
     const status = persistence.status();
     console.log(
@@ -1611,6 +1833,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`\n  ${signal} received — flushing snapshot and closing.`);
+    clearInterval(authSweep);
     void persistence
       ?.close()
       .catch((error) => console.error('[shutdown] flush failed:', error))
