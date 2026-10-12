@@ -606,7 +606,19 @@ app.use((req: Request, res: Response, next: NextFunction) => {
      * every dev endpoint already refuses in production, so a 401 from the guard
      * would mask the more specific answer.
      */
-    const isSelfGated = req.path === '/api/session' || req.path.startsWith('/api/dev/');
+    /**
+     * Self-gated routes refuse with a reason of their own rather than 401.
+     *
+     * `/api/auth/oauth/*` MUST be here: starting a sign-in happens precisely when
+     * the caller has no identity yet, so requiring one makes social sign-in
+     * unreachable in production. It was caught only by exercising the endpoint on
+     * the deployment — every local test ran with the demo header allowed, where
+     * the guard takes a different branch entirely.
+     */
+    const isSelfGated =
+      req.path === '/api/session' ||
+      req.path.startsWith('/api/dev/') ||
+      req.path.startsWith('/api/auth/oauth/');
 
     if (needsIdentity && !isSelfGated && !actorId(req)) {
       res.status(401).json({ error: 'not_authenticated', detail: 'Provide an Authorization: Bearer token.' });

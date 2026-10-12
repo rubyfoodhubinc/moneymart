@@ -173,7 +173,13 @@ gateway.stdout.on('data', (chunk) => (gatewayLog += chunk));
 gateway.stderr.on('data', (chunk) => (gatewayLog += chunk));
 
 let webServerRef = null;
+let prodGatewayRef = null;
 const cleanup = () => {
+  try {
+    prodGatewayRef?.kill('SIGKILL');
+  } catch {
+    /* already dead */
+  }
   try {
     gateway.kill('SIGKILL');
   } catch {
@@ -530,6 +536,87 @@ for (const hostile of ['https://evil.example/steal', '//evil.example', 'javascri
   !location.includes('evil.example') && !location.includes('javascript:')
     ? ok(`a hostile return path is ignored`, hostile.slice(0, 34))
     : bad(`a hostile return path is ignored`, location.slice(0, 60));
+}
+
+/* ── 8b. Reachable without an identity ─────────────────────────────────── */
+section('8b. Sign-in is reachable when signed out');
+
+/**
+ * The whole point of a sign-in endpoint is that the caller has no identity yet.
+ *
+ * The production identity guard intercepted these, so social sign-in was
+ * unreachable on the deployment while every local test passed — because the
+ * development branch of the guard behaves differently. Asserted here in the
+ * production posture, which is the only configuration that showed the fault.
+ */
+const prodGateway = (prodGatewayRef = spawn(process.execPath, [entry], {
+  cwd: path.join(repoRoot, 'services', 'api'),
+  env: {
+    ...process.env,
+    PORT: String(API_PORT + 2),
+    NODE_ENV: 'production',
+    MM_SEED: 'true',
+    MM_PERSISTENCE: 'off',
+  },
+  stdio: ['ignore', 'pipe', 'pipe'],
+}));
+let prodLog = '';
+prodGateway.stdout.on('data', (chunk) => (prodLog += chunk));
+prodGateway.stderr.on('data', (chunk) => (prodLog += chunk));
+const PROD = `http://127.0.0.1:${API_PORT + 2}`;
+
+let prodUp = false;
+for (let attempt = 0; attempt < 80; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  try {
+    if ((await fetch(`${PROD}/api/health`, { signal: AbortSignal.timeout(1500) })).ok) {
+      prodUp = true;
+      break;
+    }
+  } catch {
+    /* not up yet */
+  }
+}
+
+if (!prodUp) {
+  bad('a production-mode gateway started', prodLog.slice(-140));
+} else {
+  const providerList = await fetch(`${PROD}/api/auth/oauth/providers`).catch(() => null);
+  providerList?.status === 200
+    ? ok('the provider list is readable while signed out', '200')
+    : bad('the provider list is readable while signed out', `status ${providerList?.status}`);
+
+  const startProd = await fetch(`${PROD}/api/auth/oauth/google/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  }).catch(() => null);
+  /**
+   * 503 (not configured) and 200 (configured) are both correct. 401 is the fault:
+   * it means the caller was asked for an identity before being allowed to sign in.
+   */
+  startProd && startProd.status !== 401
+    ? ok('starting a sign-in does not require an existing identity', `status ${startProd.status}`)
+    : bad('starting a sign-in does not require an existing identity', `status ${startProd?.status}`);
+
+  const callbackProd = await fetch(`${PROD}/api/auth/oauth/google/callback`, { redirect: 'manual' }).catch(() => null);
+  callbackProd && callbackProd.status !== 401
+    ? ok('the provider callback is reachable', `status ${callbackProd.status}`)
+    : bad('the provider callback is reachable', `status ${callbackProd?.status}`);
+
+  // Authentication must still actually protect account data.
+  for (const pathname of ['/api/wallet', '/api/orders', '/api/notifications']) {
+    const guarded = await fetch(`${PROD}${pathname}`).catch(() => null);
+    guarded?.status === 401
+      ? ok(`${pathname} still requires an identity`, '401')
+      : bad(`${pathname} still requires an identity`, `status ${guarded?.status}`);
+  }
+}
+
+try {
+  prodGateway.kill('SIGKILL');
+} catch {
+  /* already dead */
 }
 
 /* ── 9. The client consumes the handoff correctly ──────────────────────── */
