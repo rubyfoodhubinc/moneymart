@@ -74,10 +74,21 @@ gateway_source = <<~'SWIFT'
    */
   enum TestGateway {
     static let baseURL = ProcessInfo.processInfo.environment["MM_UITEST_API"] ?? "GATEWAY_PLACEHOLDER"
+
+    /**
+     * Whether the not-yet-reliable flows should run.
+     *
+     * Compiled in for the same reason as the URL: `xcodebuild test` does not forward the
+     * invoking shell's environment to the test process, so a skip gate read from
+     * ProcessInfo would always see nothing and skip unconditionally — which it did.
+     */
+    static let runUnstableFlows = RUN_UNSTABLE_PLACEHOLDER
+
     static var isConfigured: Bool { !baseURL.isEmpty }
   }
 SWIFT
 gateway_source = gateway_source.sub('GATEWAY_PLACEHOLDER', ENV.fetch('MM_UITEST_API', 'http://127.0.0.1:4317'))
+gateway_source = gateway_source.sub('RUN_UNSTABLE_PLACEHOLDER', ENV['MM_UITEST_BID'] == '1' ? 'true' : 'false')
 File.write(File.join(dir, 'TestGateway.swift'), gateway_source)
 
 # ── The target ────────────────────────────────────────────────────────────────

@@ -111,10 +111,20 @@ export default function ProfileSetupScreen({ navigation, route }: { navigation: 
       });
       proceed();
     } catch (cause) {
+      /**
+       * Report the failure, then CONTINUE.
+       *
+       * Setup is not a gate. The account already exists, every field here is optional, and
+       * all of it can be changed later in settings — so failing to save must not strand
+       * someone on a screen they have finished. The error is surfaced so the loss is not
+       * silent, and entry proceeds regardless.
+       */
       setError(cause instanceof Error ? cause.message : 'Could not save your profile.');
-    } finally {
       setSaving(false);
+      proceed();
+      return;
     }
+    setSaving(false);
   };
 
   return (
@@ -135,7 +145,6 @@ export default function ProfileSetupScreen({ navigation, route }: { navigation: 
               size="sm"
               icon={<CameraIcon size={15} color={colors.ink} />}
                 onPress={() => void pickAvatar()}
-                loading={saving}
             />
             <Body size={11} color={colors.ink3} style={styles.avatarHint}>
                 A square photograph works best. It is shown beside your lots and in live rooms.
@@ -236,7 +245,15 @@ export default function ProfileSetupScreen({ navigation, route }: { navigation: 
           variant="gold"
           size="lg"
           full
-          onPress={finish}
+          /**
+           * The busy state belongs to the control that DOES the work.
+           *
+           * It previously sat on the photo picker, which saves nothing, while this button
+           * — the one that calls the API — had none, so a slow save showed no feedback
+           * where the user was actually looking.
+           */
+          loading={saving}
+          onPress={() => void finish()}
         />
       </View>
     </View>
