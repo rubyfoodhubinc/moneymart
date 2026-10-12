@@ -30,7 +30,7 @@ Built from the *MoneyMart Master Product Blueprint v2.0* (see
 | **Authorization** | ✅ Object-level checks — orders private to participants, storefront writes owner-scoped |
 | **Rate limiting** | ✅ Ingress limits on the message-sending and write paths |
 | **CI** | ✅ Green on GitHub — 345 checks over 13 suites on every push |
-| **Code delivery** | ✅ SMS via Twilio Messages and email via Resend — the sent code is the verified code |
+| **Code delivery** | ✅ Email live for real recipients via Resend; SMS via Twilio Messages — the sent code is the verified code |
 | **Social sign-in** | ✅ Google + Apple (OIDC), verified against a real JWKS and PKCE |
 | **Deployed product** | ✅ Verified in a real browser against production — mounts, renders, talks to its gateway |
 | **Verification** | ✅ **527 automated checks** across 19 suites — `pnpm verify:all` |
@@ -444,6 +444,14 @@ but any other real address is accepted. `RESEND_FROM` is now set to
 which is why real recipients work today with no DNS change.
 
 ### The branded address is a one-variable upgrade
+
+### A coverage gap this exposed
+
+The browser-UI suite signed in with `@example.com` addresses, which Resend refuses
+outright — so the delivered branch (countdown, resend, spam hint) was **never
+covered** while appearing to be. The address domain is now a variable, and the
+delivered path is genuinely asserted. That is why the delivered branch went
+unverified for two rounds while I described it as working.
 
 `moneymart.app` is added to Resend but not verified, and **it is served by IONOS
 nameservers** (`ns1114.ui-dns.com` and friends), not Cloudflare. Four records in
