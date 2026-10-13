@@ -700,14 +700,30 @@ Recorded plainly, because a green summary that hides these would be misleading.
 | Vercel deployment | Needs `vercel login` in a browser. |
 | Real payment credentials | Stripe/PayPal/Paystack adapters are wired and select per currency; without keys the simulated rail is used, which is a working rail rather than a stub. |
 
-### A machine-level regression late in the session
+### A machine-level regression late in the session — THREE suites, and unexplained
 
-Two suites — **Social sign-in** and **Production product smoke** — began failing on this
-host with `setTypeOfService EINVAL` from Node's undici, a socket-option call the OS refused.
-Both passed earlier the same day (47 and 21 checks), a plain `fetch` to the same host still
-returns 200, and **both the CI release gate and the production deploy check pass**. It is an
-environment fault on this machine, not a product one, and it appeared after the tooling
-installs this session required.
+**Social sign-in**, **TV / IPTV** and **Production product smoke** all fail on this host with
+`setTypeOfService EINVAL` from Node's undici — a socket option the OS refused during a
+request-body write. All three passed earlier the same day (47, 41 and 21 checks), and the
+failure appeared after the tooling this session installed.
+
+Corrected: this section first named only two suites. **TV was reported from an unread
+background job** and is affected as well. The earlier count of 41/41 was real, but it is
+**stale, not current**.
+
+What I established while trying to explain it, and what I could not:
+
+- A plain `GET` and a plain `POST` with a body both return **200** to production *and* to
+  localhost, so it is not "networking" or "HTTPS" in general.
+- **All three failing suites launch Chrome**; the other suites do not. But Chrome still
+  launches correctly — its DevTools endpoint answers **200** — so Chrome is not broken.
+- A minimal reproduction of *spawn Chrome, then fetch the CDP endpoint, then fetch a remote
+  host* **did not fail.** I could not isolate the trigger, and I am not going to imply
+  otherwise.
+
+**Both the CI release gate and the production deploy check pass** (deploy re-verified at
+28/0 *after* the last commit), and every suite that talks only to localhost is green. So this
+is a fault of this machine, not of the product — but the precise cause is **undiagnosed**.
 
 ## Driving the mobile app with a real UI test
 
