@@ -470,9 +470,9 @@ covered** while appearing to be. The address domain is now a variable, and the
 delivered path is genuinely asserted. That is why the delivered branch went
 unverified for two rounds while I described it as working.
 
-`moneymart.app` is added to Resend but not verified, and **it is served by IONOS
-nameservers** (`ns1114.ui-dns.com` and friends), not Cloudflare. Four records in
-the IONOS DNS panel complete it:
+`moneymart.app` **is now verified in Resend.** It is served by IONOS nameservers
+(`ns1114.ui-dns.com` and friends), not Cloudflare. The four records that completed it
+were added in the IONOS DNS panel and confirmed live on the authoritative nameserver:
 
 | Type | Name | Value |
 |---|---|---|
@@ -481,8 +481,10 @@ the IONOS DNS panel complete it:
 | TXT | `send` | `v=spf1 include:amazonses.com ~all` |
 | CNAME | `rsend` | `send.forge.rmta.net` |
 
-Once they propagate, changing `RESEND_FROM` to `codes@moneymart.app` is the entire
-migration — no code change, no redeploy of anything but a variable.
+They propagated immediately. `RESEND_FROM` is now `MoneyMart <codes@moneymart.app>` on
+the Railway service, and a real code request through the production API returns
+`{"delivered": true, "transport": "resend", "reachable": true}` — so the branded sender
+is proven end to end, not merely configured.
 
 ## Sign-in code delivery (SMS and email)
 
@@ -694,9 +696,10 @@ Recorded plainly, because a green summary that hides these would be misleading.
 |---|---|
 | **Lot cards expose no accessibility label** | **Product defect.** The feed's cards carry no addressable element, so a screen reader cannot describe a lot and a UI test cannot open one. The fix belongs in the card component (a label from the lot's title and price). |
 | Mobile **bid** and **sell/photo** flows | Unverified by tap. Blocked behind the card-label defect for the bid; the photo path's conversion logic is verified against the real API but the camera/library itself is not. |
-| Twilio credentials | Not supplied — SMS codes are generated but cannot be sent. **Email sign-in works.** |
-| 4 IONOS DNS records | Not added — a branded sender address is cosmetic; `mail.everystudio.app` works today. |
-| `www.moneymart.app` | Not pointed at the deployment. |
+| Twilio credentials | The signed-in account is **"RUBYNAV APP"**, and its console warns that **unregistered 10DLC numbers have US SMS blocked**. The Auth Token was not extracted. **Email sign-in works and is now branded.** |
+| RevenueCat | **No MoneyMart project exists.** The account holds GetZ Family, NooraIPTV, RubyNav and VitalYou. A MoneyMart project (and its products/entitlements) has to be created before a secret key can exist. |
+| ~~4 IONOS DNS records~~ | **DONE.** All four added and `moneymart.app` now **Verified** in Resend; production sends from `codes@moneymart.app` (`delivered: true`). |
+| `www.moneymart.app` | **Not pointed at the deployment** — but it currently serves nothing (`http 000`), so repointing is a pure improvement rather than a risk. |
 | Vercel deployment | Needs `vercel login` in a browser. |
 | Real payment credentials | Stripe/PayPal/Paystack adapters are wired and select per currency; without keys the simulated rail is used, which is a working rail rather than a stub. |
 
