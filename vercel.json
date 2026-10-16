@@ -6,7 +6,6 @@
   "framework": null,
   "rewrites": [
     {
-      "comment": "SPA deep-link fallback. The API lives on Railway, so only client routes are rewritten here.",
       "source": "/((?!assets/).*)",
       "destination": "/index.html"
     }
@@ -24,9 +23,18 @@
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "SAMEORIGIN"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
         {
           "key": "Permissions-Policy",
           "value": "geolocation=(), microphone=(self), camera=(self)"

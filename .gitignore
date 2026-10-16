@@ -60,3 +60,9 @@ Thumbs.db
 # app.json. Regenerate with `pnpm --filter @moneymart/mobile prebuild`.
 apps/mobile/ios/
 apps/mobile/android/
+
+# ── Vercel CLI link state ─────────────────────────────────────────────────────
+# `vercel link` writes .vercel/project.json holding the organisation and project
+# ids for one developer's account. It is per-machine link state, not source, so
+# committing it would pin the repository to a single account's project.
+.vercel/
