@@ -188,6 +188,14 @@ struct LiveStream: Codable, Hashable, Identifiable, Sendable {
     var format: String?
     var visibility: String?
     var language: String?
+    var seriesId: String?
+    var moderators: [PublicProfile]?
+    /// Only present in the host's own view of a show.
+    var mutedWords: [String]?
+    var explicit: Bool?
+    var shipping: ShowShipping?
+    var reminderCount: Int?
+    var shareUrl: String?
     var scheduledStartTime: String?
     var endTime: String?
     var status: String
@@ -306,8 +314,15 @@ struct AuctionDetailResponse: Codable, Sendable {
     var related: [Auction]?
 }
 
+struct ShowShipping: Codable, Hashable, Sendable {
+    var freePickup: Bool
+    var shippingCap: Double?
+}
+
 struct StreamDetailResponse: Codable, Sendable {
     var stream: LiveStream
+    /// Whether the signed-in viewer saved this show for a reminder.
+    var reminded: Bool?
     var chat: [ChatMessage]
     var queue: [Auction]
 }
@@ -452,6 +467,16 @@ struct SellerProfileResponse: Codable, Sendable {
 
 struct StreamResponse: Codable, Sendable {
     var stream: LiveStream
+}
+
+struct StreamBatchResponse: Codable, Sendable {
+    var streams: [LiveStream]
+    var seriesId: String?
+}
+
+struct ReminderResponse: Codable, Sendable {
+    var reminded: Bool
+    var reminderCount: Int
 }
 
 struct MyStreamsResponse: Codable, Sendable {

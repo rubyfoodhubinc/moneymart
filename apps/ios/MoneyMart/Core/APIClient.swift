@@ -224,6 +224,23 @@ extension APIClient {
         var format: String?
         var visibility: String?
         var language: String?
+        var posterUrl: String?
+        /// Handles of trusted chat moderators.
+        var moderators: [String]?
+        var mutedWords: [String]?
+        var explicit: Bool?
+        var shipping: ShowShipping?
+    }
+
+    /// Schedules several shows from one template; all-or-nothing on the server.
+    func createStreams(_ show: ShowInput, startTimes: [String]) async throws -> StreamBatchResponse {
+        struct B: Encodable, Sendable { let show: ShowInput; let startTimes: [String] }
+        return try await post("/api/streams/batch", body: B(show: show, startTimes: startTimes))
+    }
+
+    func setReminder(streamId: String, on: Bool) async throws -> ReminderResponse {
+        struct B: Encodable, Sendable { let on: Bool }
+        return try await post("/api/streams/\(streamId)/remind", body: B(on: on))
     }
 
     func myStreams() async throws -> MyStreamsResponse { try await get("/api/me/streams") }

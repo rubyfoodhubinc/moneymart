@@ -383,11 +383,22 @@ function expandAuction(auctionId: string): AuctionWithRelations | null {
   };
 }
 
+/** Public web address of a show; the app opens `moneymart://stream/<id>`. */
+function showShareUrl(streamId: string): string {
+  const base = (process.env.MM_PUBLIC_WEB_URL ?? 'https://www.moneymart.app').replace(/\/+$/, '');
+  return `${base}/stream/${encodeURIComponent(streamId)}`;
+}
+
 function expandStream(streamId: string) {
   const stream = streams.get(streamId);
   if (!stream) return null;
+  // Who asked for a reminder and which words are muted are the host's business only.
+  const { reminderUserIds, mutedWords: _muted, ...visible } = stream;
   return {
-    ...stream,
+    ...visible,
+    reminderCount: reminderUserIds?.length ?? 0,
+    shareUrl: showShareUrl(stream.id),
+    moderators: (stream.moderatorIds ?? []).map((id) => publicProfile(id)),
     creator: publicProfile(stream.creatorId),
     activeAuction: stream.activeAuctionId ? (expandAuction(stream.activeAuctionId) ?? undefined) : undefined,
     queuedCount: stream.itemQueue.length,
@@ -1203,7 +1214,7 @@ const SHOW_TITLE_MAX = 150;
  * Validate the editable fields of a show. Returns an error message, or null
  * after writing the accepted values onto `target`.
  */
-function applyShowFields(body: Record<string, unknown>, target: Partial<Stream>, creating: boolean): string | null {
+function applyShowFields(body: Record<string, unknown>, target: Partial<Stream>, creating: boolean, hostId = ''): string | null {
   if (creating || body.title !== undefined) {
     const title = String(body.title ?? '').trim();
     if (title.length < 3 || title.length > SHOW_TITLE_MAX) return `A show title is 3–${SHOW_TITLE_MAX} characters.`;
@@ -1241,6 +1252,41 @@ function applyShowFields(body: Record<string, unknown>, target: Partial<Stream>,
     if (!LANGUAGE_TAG.test(value)) return 'A language must be a tag such as `en` or `es`.';
     target.language = value;
   }
+  if (body.moderators !== undefined) {
+    if (!Array.isArray(body.moderators) || body.moderators.length > 10) return 'Up to 10 moderators.';
+    const ids: string[] = [];
+    for (const raw of body.moderators) {
+      const handle = String(raw).trim().replace(/^@/, '');
+      const user = users.findByHandle(handle) ?? users.get(handle);
+      if (!user) return `No account called @${handle}.`;
+      if (user.id === hostId) continue;
+      if (!ids.includes(user.id)) ids.push(user.id);
+    }
+    target.moderatorIds = ids;
+  }
+  if (body.mutedWords !== undefined) {
+    if (!Array.isArray(body.mutedWords) || body.mutedWords.length > 50) return 'Up to 50 muted words.';
+    const words = body.mutedWords.map((w) => String(w).trim().toLowerCase()).filter(Boolean);
+    if (words.some((w) => w.length > 30)) return 'A muted word is at most 30 characters.';
+    target.mutedWords = [...new Set(words)];
+  }
+  if (body.explicit !== undefined) {
+    if (typeof body.explicit !== 'boolean') return 'explicit must be true or false.';
+    target.explicit = body.explicit;
+  }
+  if (body.shipping !== undefined) {
+    const raw = body.shipping as Record<string, unknown> | null;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'shipping must be an object.';
+    const freePickup = raw.freePickup === undefined ? false : raw.freePickup;
+    if (typeof freePickup !== 'boolean') return 'freePickup must be true or false.';
+    let shippingCap: number | undefined;
+    if (raw.shippingCap !== undefined && raw.shippingCap !== null && raw.shippingCap !== '') {
+      shippingCap = Number(raw.shippingCap);
+      if (!Number.isFinite(shippingCap) || shippingCap < 0 || shippingCap > 1000) return 'A shipping cap is between 0 and 1,000.';
+      shippingCap = Math.round(shippingCap * 100) / 100;
+    }
+    target.shipping = { freePickup, shippingCap };
+  }
   if (body.posterUrl !== undefined) {
     if (body.posterUrl === null || body.posterUrl === '') target.posterUrl = '';
     else {
@@ -1274,14 +1320,27 @@ app.post('/api/streams', (req, res) => {
     return;
   }
   const draft: Partial<Stream> = {};
-  const problem = applyShowFields((req.body ?? {}) as Record<string, unknown>, draft, true);
+  const problem = applyShowFields((req.body ?? {}) as Record<string, unknown>, draft, true, userId);
   if (problem) {
     res.status(400).json({ error: 'invalid_show', detail: problem });
     return;
   }
-  const stream: Stream = {
+  const stream = buildShow(user, draft);
+  streams.create(stream);
+  res.status(201).json({ stream: hostView(stream.id) });
+});
+
+/** A new scheduled show from validated fields. */
+function buildShow(user: User, draft: Partial<Stream>, seriesId?: string): Stream {
+  return {
     id: store.nextId('str'),
-    creatorId: userId,
+    creatorId: user.id,
+    seriesId,
+    moderatorIds: draft.moderatorIds ?? [],
+    mutedWords: draft.mutedWords ?? [],
+    explicit: draft.explicit ?? false,
+    shipping: draft.shipping ?? { freePickup: false },
+    reminderUserIds: [],
     title: draft.title!,
     category: draft.category!,
     subcategory: draft.subcategory,
@@ -1301,8 +1360,99 @@ app.post('/api/streams', (req, res) => {
     totalGMV: 0,
     chatEnabled: true,
   };
-  streams.create(stream);
-  res.status(201).json({ stream: expandStream(stream.id) });
+}
+
+/** The host's own view of a show: the public shape plus their muted words. */
+function hostView(streamId: string) {
+  const stream = streams.get(streamId);
+  const expanded = expandStream(streamId);
+  if (!stream || !expanded) return null;
+  return { ...expanded, mutedWords: stream.mutedWords ?? [] };
+}
+
+/**
+ * Schedule a run of shows in one step (the guided scheduler's "every Tuesday and
+ * Thursday for two weeks"). All-or-nothing: one bad time refuses the whole batch,
+ * so a seller never ends up with half a schedule.
+ */
+app.post('/api/streams/batch', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  if (!user.sellerProfile) {
+    res.status(403).json({ error: 'seller_profile_required', detail: 'Finish seller setup (including your return address) before scheduling a show.' });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const times = Array.isArray(body.startTimes) ? body.startTimes.map(String) : [];
+  if (times.length < 1 || times.length > 20) {
+    res.status(400).json({ error: 'invalid_schedule', detail: 'Choose between 1 and 20 show times.' });
+    return;
+  }
+  const upcoming = streams.byCreator(userId).filter((s) => s.status !== 'ended').length;
+  if (upcoming + times.length > 50) {
+    res.status(429).json({ error: 'too_many_shows', detail: 'You can have up to 50 upcoming shows.' });
+    return;
+  }
+  const show = (typeof body.show === 'object' && body.show !== null ? body.show : {}) as Record<string, unknown>;
+  const drafts: Partial<Stream>[] = [];
+  for (const time of times) {
+    const draft: Partial<Stream> = {};
+    const problem = applyShowFields({ ...show, scheduledStartTime: time }, draft, true, userId);
+    if (problem) {
+      res.status(400).json({ error: 'invalid_show', detail: problem, at: time });
+      return;
+    }
+    drafts.push(draft);
+  }
+  const sorted = drafts.map((d) => Date.parse(d.scheduledStartTime!)).sort((a, b) => a - b);
+  if (sorted.some((t, i) => i > 0 && t - sorted[i - 1]! < 30 * 60_000)) {
+    res.status(400).json({ error: 'invalid_schedule', detail: 'Shows must be at least 30 minutes apart.' });
+    return;
+  }
+  const seriesId = times.length > 1 ? store.nextId('ser') : undefined;
+  const created = drafts.map((draft) => {
+    const stream = buildShow(user, draft, seriesId);
+    streams.create(stream);
+    return hostView(stream.id);
+  });
+  res.status(201).json({ streams: created, seriesId });
+});
+
+/**
+ * Save a show and be notified when it goes live. Any signed-in viewer except the
+ * host; only while the show is still scheduled.
+ */
+app.post('/api/streams/:id/remind', (req, res) => {
+  const userId = actorId(req);
+  if (!users.get(userId)) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  // A private show is reachable by its link, so whoever holds the link may save it.
+  const stream = streams.get(req.params.id);
+  if (!stream) {
+    res.status(404).json({ error: 'stream_not_found' });
+    return;
+  }
+  if (stream.creatorId === userId) {
+    res.status(400).json({ error: 'own_show', detail: 'You are hosting this show.' });
+    return;
+  }
+  if (stream.status !== 'scheduled') {
+    res.status(409).json({ error: 'show_not_scheduled', detail: 'Reminders are for shows that have not started.' });
+    return;
+  }
+  const on = (req.body ?? {}).on !== false;
+  const list = new Set(stream.reminderUserIds ?? []);
+  if (on) list.add(userId);
+  else list.delete(userId);
+  stream.reminderUserIds = [...list].slice(0, 100_000);
+  streams.save(stream);
+  res.json({ ok: true, reminded: on, reminderCount: stream.reminderUserIds.length });
 });
 
 /** Edit a show that has not started. */
@@ -1314,7 +1464,7 @@ app.patch('/api/streams/:id', (req, res) => {
     return;
   }
   const draft: Partial<Stream> = { category: stream.category };
-  const problem = applyShowFields((req.body ?? {}) as Record<string, unknown>, draft, false);
+  const problem = applyShowFields((req.body ?? {}) as Record<string, unknown>, draft, false, stream.creatorId);
   if (problem) {
     res.status(400).json({ error: 'invalid_show', detail: problem });
     return;
@@ -1323,7 +1473,7 @@ app.patch('/api/streams/:id', (req, res) => {
   if (draft.category !== stream.category && draft.subcategory === undefined) stream.subcategory = undefined;
   Object.assign(stream, draft);
   streams.save(stream);
-  res.json({ stream: expandStream(stream.id) });
+  res.json({ stream: hostView(stream.id) });
 });
 
 /** Cancel a show that has not started. */
@@ -1348,7 +1498,7 @@ app.get('/api/me/streams', (req, res) => {
     res.status(401).json({ error: 'not_authenticated' });
     return;
   }
-  const mine = streams.byCreator(userId).map((s) => expandStream(s.id)!).filter(Boolean);
+  const mine = streams.byCreator(userId).map((s) => hostView(s.id)!).filter(Boolean);
   const upcoming = mine.filter((s) => s.status !== 'ended').sort((a, b) => Date.parse(a.scheduledStartTime) - Date.parse(b.scheduledStartTime));
   const past = mine.filter((s) => s.status === 'ended').sort((a, b) => Date.parse(b.endTime ?? b.scheduledStartTime) - Date.parse(a.endTime ?? a.scheduledStartTime));
   res.json({ upcoming, past });
@@ -1415,7 +1565,8 @@ app.delete('/api/streams/:id/items/:auctionId', (req, res) => {
 
 app.get('/api/streams', (req, res) => {
   const { status } = req.query as { status?: string };
-  let list = streams.all().map((s) => expandStream(s.id)).filter(Boolean);
+  // A private show is reachable by its link, never listed.
+  let list = streams.all().filter((s) => s.visibility !== 'private').map((s) => expandStream(s.id)).filter(Boolean);
   if (status) list = list.filter((s) => s!.status === status);
   list.sort((a, b) => b!.viewerCount - a!.viewerCount);
   res.json({ items: list, total: list.length });
@@ -1427,8 +1578,10 @@ app.get('/api/streams/:id', (req, res) => {
     res.status(404).json({ error: 'stream_not_found' });
     return;
   }
+  const viewer = actorId(req);
   res.json({
     stream,
+    reminded: Boolean(viewer && streams.get(req.params.id)?.reminderUserIds?.includes(viewer)),
     chat: chat.get(req.params.id),
     queue: stream.itemQueue
       .map((id) => expandAuction(id))
@@ -1445,9 +1598,11 @@ app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
     res.status(404).json({ error: 'not_found' });
     return;
   }
+  const firstStart = !stream.actualStartTime;
   stream.activeAuctionId = auction.id;
   stream.status = 'live';
   stream.actualStartTime = stream.actualStartTime ?? store.iso();
+  if (firstStart) notifyShowLive(stream);
   streams.save(stream);
   auction.status = 'live';
   auction.startTime = store.iso();
@@ -1460,6 +1615,24 @@ app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
   });
   res.json({ ok: true, stream: expandStream(stream.id), auction: expandAuction(auction.id) });
 });
+
+/** Tell everyone who saved the show that it has started. Once per show. */
+function notifyShowLive(stream: Stream): void {
+  const host = users.get(stream.creatorId);
+  for (const userId of stream.reminderUserIds ?? []) {
+    const notification = notifications.create({
+      id: store.nextId('ntf'),
+      userId,
+      category: 'streams',
+      title: `${host?.displayName ?? 'A seller you follow'} is live`,
+      body: stream.title,
+      href: `/stream/${stream.id}`,
+      read: false,
+      createdAt: store.iso(),
+    });
+    io.to(`user:${userId}`).emit('notification', notification);
+  }
+}
 
 app.post('/api/streams/:id/end', (req, res) => {
   const stream = requireHost(req, res, req.params.id);
@@ -1800,7 +1973,8 @@ app.get('/api/tv/epg.xml', (_req, res) => {
   const stamp = (date: Date) =>
     `${date.toISOString().replace(/[-:]/g, '').split('.')[0]} +0000`;
 
-  const events = [...streams.all()].sort(
+  // Private shows are shared by link only, so they stay out of the public guide.
+  const events = streams.all().filter((s) => s.visibility !== 'private').sort(
     (a, b) => Date.parse(a.scheduledStartTime) - Date.parse(b.scheduledStartTime),
   );
 
@@ -3022,6 +3196,16 @@ io.on('connection', (socket) => {
     const userId = socketUserId(socket);
     if (!userId) return;
     const author = users.get(userId);
+    const room = streams.get(payload.streamId);
+    const body = String(payload.body ?? '').slice(0, 400);
+    /**
+     * The host's muted words: a matching message is not stored or broadcast. The
+     * sender is not told, so the filter cannot be probed word by word.
+     */
+    if (room?.mutedWords?.length && room.creatorId !== userId) {
+      const lower = body.toLowerCase();
+      if (room.mutedWords.some((word) => lower.includes(word))) return;
+    }
     // The author is the authenticated user, so a display name or creator badge
     // cannot be forged by the payload.
     const message = chat.addChat({
@@ -3029,7 +3213,7 @@ io.on('connection', (socket) => {
       streamId: payload.streamId,
       userId,
       displayName: author?.displayName ?? 'Member',
-      body: String(payload.body ?? '').slice(0, 400),
+      body,
       isPinned: false,
       isCreator: streams.get(payload.streamId)?.creatorId === userId,
       createdAt: store.iso(),

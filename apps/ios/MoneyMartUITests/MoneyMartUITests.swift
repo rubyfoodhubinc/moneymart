@@ -175,6 +175,9 @@ final class MoneyMartUITests: XCTestCase {
         let newShow = app.buttons["shows-new"]
         XCTAssertTrue(newShow.waitForExistence(timeout: 10))
         newShow.tap()
+        let single = app.buttons["Single show"]
+        XCTAssertTrue(single.waitForExistence(timeout: 5), "the + menu offers a single show")
+        single.tap()
         let showTitle = app.textFields["show-title"]
         XCTAssertTrue(showTitle.waitForExistence(timeout: 5))
         showTitle.tap()
@@ -194,6 +197,35 @@ final class MoneyMartUITests: XCTestCase {
         add.tap()
         app.navigationBars.buttons["Done"].tap()
         XCTAssertTrue(app.staticTexts["QA Candy Crate"].waitForExistence(timeout: 10), "the item is in the run order")
+
+        // Plan a twice-weekly run with the guided scheduler.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'show-str_'"))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
+        let before = rows.count
+        app.buttons["shows-new"].tap()
+        let plan = app.buttons["Plan your shows"]
+        XCTAssertTrue(plan.waitForExistence(timeout: 5))
+        plan.tap()
+        let wizardNext = app.buttons["wizard-next"]
+        XCTAssertTrue(wizardNext.waitForExistence(timeout: 5))
+        app.buttons["wizard-frequency-weekly2"].tap(); wizardNext.tap()
+        app.buttons["wizard-day-3"].tap(); app.buttons["wizard-day-5"].tap(); wizardNext.tap()
+        wizardNext.tap() // default start time
+        XCTAssertTrue(wizardNext.isEnabled, "two weeks of Tuesdays and Thursdays leaves dates to schedule")
+        wizardNext.tap() // calendar
+        let wizardTitle = app.textFields["wizard-title"]
+        XCTAssertTrue(wizardTitle.waitForExistence(timeout: 5))
+        wizardTitle.tap()
+        wizardTitle.typeText("QA Weekly Candy\n")
+        wizardNext.tap() // title
+        wizardNext.tap() // category
+        wizardNext.tap() // cover: add later
+        XCTAssertTrue(wizardNext.label.contains("Schedule"), wizardNext.label)
+        wizardNext.tap()
+        let deadline = Date().addingTimeInterval(15)
+        while rows.count < before + 3 && Date() < deadline { _ = rows.firstMatch.waitForExistence(timeout: 1) }
+        XCTAssertGreaterThanOrEqual(rows.count, before + 3, "the series is scheduled in one step")
     }
 
     private func signIn(_ identifier: String) throws {

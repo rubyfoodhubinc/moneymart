@@ -43,6 +43,8 @@ final class StreamRoom {
     var queue: [Auction] = []
     var lot: BidController?
     var error: String?
+    /// The viewer saved this scheduled show for a reminder.
+    var reminded = false
 
     @ObservationIgnored private var subscriptions: [RealtimeSubscription] = []
 
@@ -54,6 +56,7 @@ final class StreamRoom {
             stream = detail.stream
             chat = detail.chat
             queue = detail.queue
+            reminded = detail.reminded ?? false
             await focus(on: detail.stream.activeAuctionId ?? detail.stream.activeAuction?.id)
             attach()
         } catch {
@@ -233,6 +236,22 @@ struct StreamView: View {
             Text(room.stream?.playback?.label ?? String(localized: "Starts soon")).font(MM.Font.display(22)).foregroundStyle(.white)
             if let start = room.stream?.scheduledStartTime.flatMap(ISODate.parse) {
                 Text(start.formatted(date: .abbreviated, time: .shortened)).font(MM.Font.body(14)).foregroundStyle(MM.Color.ink2)
+                if start > .now { CountdownText(end: start) }
+            }
+            if let stream = room.stream, stream.isScheduled {
+                if stream.creatorId != session.user?.id {
+                    Button(action: toggleReminder) {
+                        Label(room.reminded ? "Saved — we’ll remind you" : "Remind me", systemImage: room.reminded ? "bell.fill" : "bell")
+                    }
+                    .buttonStyle(.goldCompact)
+                    .accessibilityIdentifier("stream-remind")
+                }
+                if let link = stream.shareUrl.flatMap(URL.init(string:)) {
+                    ShareLink(item: link, subject: Text(stream.title), message: Text(stream.title)) {
+                        Label("Share show", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.glassCompact)
+                }
             }
         }
         .padding(24).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: MM.Radius.xl))
@@ -260,6 +279,22 @@ struct StreamView: View {
         RequiresSignIn.run(session, router) {
             room.send(draft)
             draft = ""
+        }
+    }
+
+    private func toggleReminder() {
+        RequiresSignIn.run(session, router) {
+            let target = !room.reminded
+            room.reminded = target
+            Task {
+                do {
+                    let result = try await APIClient.shared.setReminder(streamId: streamId, on: target)
+                    room.reminded = result.reminded
+                    room.stream?.reminderCount = result.reminderCount
+                } catch {
+                    room.reminded = !target
+                }
+            }
         }
     }
 

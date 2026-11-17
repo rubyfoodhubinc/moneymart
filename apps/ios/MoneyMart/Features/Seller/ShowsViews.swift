@@ -7,6 +7,7 @@ struct MyShowsView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var showSchedule = false
+    @State private var showWizard = false
     @State private var segment = 0
 
     var body: some View {
@@ -29,7 +30,10 @@ struct MyShowsView: View {
                                        title: segment == 0 ? "No shows scheduled" : "No past shows",
                                        message: segment == 0 ? "Schedule a show, then add the items you’ll sell on air." : "Shows you’ve hosted will appear here.")
                         if segment == 0 {
-                            Button("Schedule a show") { showSchedule = true }.buttonStyle(.gold)
+                            Button("Plan your shows") { showWizard = true }
+                                .buttonStyle(.gold)
+                                .accessibilityIdentifier("shows-plan")
+                            Button("Schedule a single show") { showSchedule = true }.buttonStyle(.glass)
                         }
                     }
                     ForEach(list) { show in
@@ -46,12 +50,17 @@ struct MyShowsView: View {
         .navigationTitle("My shows")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { showSchedule = true } label: { Image(systemName: "plus") }
+                Menu {
+                    Button { showWizard = true } label: { Label("Plan your shows", systemImage: "calendar.badge.plus") }
+                    Button { showSchedule = true } label: { Label("Single show", systemImage: "plus") }
+                        .accessibilityIdentifier("shows-new-single")
+                } label: { Image(systemName: "plus") }
                     .accessibilityLabel("Schedule a show")
                     .accessibilityIdentifier("shows-new")
             }
         }
         .sheet(isPresented: $showSchedule) { ScheduleShowSheet { _ in Task { await load() } } }
+        .sheet(isPresented: $showWizard) { ScheduleWizard { _ in Task { await load() } } }
         .mmScreen()
         .task { await load() }
     }
@@ -77,9 +86,14 @@ struct ShowRow: View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous).fill(MM.Color.raised)
-                Image(systemName: Catalog.category(show.category).symbol).font(.system(size: 22)).foregroundStyle(MM.Color.gold)
+                if let cover = show.posterUrl, !cover.isEmpty {
+                    ArtworkView(source: cover, symbol: Catalog.category(show.category).symbol)
+                } else {
+                    Image(systemName: Catalog.category(show.category).symbol).font(.system(size: 22)).foregroundStyle(MM.Color.gold)
+                }
             }
             .frame(width: 58, height: 58)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
                 Text(show.title).font(MM.Font.body(16, weight: .semibold)).foregroundStyle(MM.Color.ink).lineLimit(2)
                 Text(subtitle).font(MM.Font.body(13)).foregroundStyle(MM.Color.ink2)
@@ -105,10 +119,11 @@ struct ShowRow: View {
     }
 }
 
-/// Schedules a show. The guided multi-step scheduler arrives in phase 2; this covers
-/// everything the server needs today.
+/// The full show form: every option in one place. Creates a single show, or edits
+/// one that has not started when `existing` is given.
 struct ScheduleShowSheet: View {
-    var onCreated: (LiveStream) -> Void
+    var existing: LiveStream? = nil
+    var onSaved: (LiveStream) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(SessionStore.self) private var session
 
@@ -118,8 +133,19 @@ struct ScheduleShowSheet: View {
     @State private var start = Calendar.current.date(byAdding: .hour, value: 1, to: .now) ?? .now
     @State private var format = "auction"
     @State private var description = ""
+    @State private var posterUrl: String?
+    @State private var isPrivate = false
+    @State private var explicit = false
+    @State private var language = Locale.current.language.languageCode?.identifier ?? "en"
+    @State private var moderators = ""
+    @State private var mutedWords = ""
+    @State private var freePickup = false
+    @State private var shippingCap = ""
     @State private var busy = false
     @State private var message: String?
+    @State private var prefilled = false
+
+    private static let languages = ["en", "es", "fr", "pt", "de", "ar", "zh", "yo"]
 
     var body: some View {
         NavigationStack {
@@ -145,41 +171,140 @@ struct ScheduleShowSheet: View {
                     }
                     InputField(title: "Show notes (optional)", text: $description, prompt: "What buyers should know: shipping, specials, house rules", axis: .vertical)
                         .lineLimit(3...6)
+
+                    group("Cover image") {
+                        ShowThumbnailPicker(posterUrl: $posterUrl, title: title, category: category)
+                    }
+
+                    group("Audience") {
+                        Toggle(isOn: $isPrivate) {
+                            optionLabel("Private show", "Only people with the link can find it.")
+                        }
+                        Toggle(isOn: $explicit) {
+                            optionLabel("Mature content", "Viewers see a warning before joining.")
+                        }
+                        HStack {
+                            optionLabel("Language you’ll speak", "Helps buyers who speak it find you.")
+                            Spacer()
+                            Picker("Language", selection: $language) {
+                                ForEach(Self.languages, id: \.self) { code in
+                                    Text(Locale.current.localizedString(forLanguageCode: code) ?? code).tag(code)
+                                }
+                            }
+                            .pickerStyle(.menu).tint(MM.Color.gold)
+                        }
+                    }
+
+                    group("Chat") {
+                        InputField(title: "Moderators (optional)", text: $moderators, prompt: "@handle, @handle")
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        InputField(title: "Muted words (optional)", text: $mutedWords, prompt: "Comma separated")
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("Messages containing a muted word are quietly held back.").font(MM.Font.body(12)).foregroundStyle(MM.Color.ink3)
+                    }
+
+                    group("Shipping") {
+                        Toggle(isOn: $freePickup) {
+                            optionLabel("Local pickup", "Buyers can collect from you instead of paying shipping.")
+                        }
+                        InputField(title: "Shipping cap per buyer (optional)", text: $shippingCap, prompt: "e.g. 10", keyboard: .decimalPad)
+                        Text("The most one buyer pays in shipping for everything they win in this show.").font(MM.Font.body(12)).foregroundStyle(MM.Color.ink3)
+                    }
+
                     if let message {
                         Label(message, systemImage: "exclamationmark.triangle.fill").font(MM.Font.body(13, weight: .medium)).foregroundStyle(MM.Color.errorText)
                     }
                     Button(action: save) {
-                        if busy { ProgressView().tint(MM.Color.navy) } else { Text("Schedule show") }
+                        if busy { ProgressView().tint(MM.Color.navy) } else { Text(existing == nil ? "Schedule show" : "Save changes") }
                     }
                     .buttonStyle(.gold)
                     .disabled(busy || title.trimmed.count < 3 || title.count > 150)
                     .accessibilityIdentifier("show-save")
                 }
                 .padding(MM.Space.screen)
+                .tint(MM.Color.gold)
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Schedule a show")
+            .navigationTitle(existing == nil ? "Schedule a show" : "Edit show")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-            .mmScreen()
-            .onAppear {
-                if let main = session.user?.sellerProfile?.mainCategory, category == "collectibles" { category = main }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                }
             }
+            .mmScreen()
+            .onAppear(perform: prefill)
         }
     }
 
+    private func group<Content: View>(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(MM.Font.display(17)).foregroundStyle(MM.Color.ink)
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .mmCard()
+    }
+
+    private func optionLabel(_ title: LocalizedStringKey, _ detail: LocalizedStringKey) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(MM.Font.body(15, weight: .medium)).foregroundStyle(MM.Color.ink)
+            Text(detail).font(MM.Font.body(12)).foregroundStyle(MM.Color.ink3)
+        }
+    }
+
+    private func prefill() {
+        guard !prefilled else { return }
+        prefilled = true
+        guard let show = existing else {
+            if let main = session.user?.sellerProfile?.mainCategory { category = main }
+            return
+        }
+        title = show.title
+        category = show.category ?? category
+        subcategory = show.subcategory
+        if let date = show.startDate { start = date }
+        format = show.format ?? "auction"
+        description = show.description ?? ""
+        posterUrl = (show.posterUrl?.isEmpty == false) ? show.posterUrl : nil
+        isPrivate = show.visibility == "private"
+        explicit = show.explicit ?? false
+        language = show.language ?? language
+        moderators = (show.moderators ?? []).map { "@\($0.handle)" }.joined(separator: ", ")
+        mutedWords = (show.mutedWords ?? []).joined(separator: ", ")
+        freePickup = show.shipping?.freePickup ?? false
+        shippingCap = show.shipping?.shippingCap.map { String(format: "%g", $0) } ?? ""
+    }
+
+    private static func list(_ text: String) -> [String] {
+        text.split(separator: ",").map { String($0).trimmed }.filter { !$0.isEmpty }
+    }
+
     private func save() {
-        busy = true; message = nil
+        message = nil
+        let cap = shippingCap.trimmed.replacingOccurrences(of: ",", with: ".")
+        if !cap.isEmpty, Double(cap) == nil { message = String(localized: "The shipping cap must be a number."); return }
+        busy = true
         let input = APIClient.ShowInput(
             title: title.trimmed, categoryId: category, subcategoryId: subcategory,
-            scheduledStartTime: start.ISO8601Format(), description: description.trimmed.isEmpty ? nil : description.trimmed,
-            format: format, visibility: "public", language: Locale.current.language.languageCode?.identifier)
+            scheduledStartTime: start.ISO8601Format(), description: description.trimmed,
+            format: format, visibility: isPrivate ? "private" : "public", language: language,
+            posterUrl: posterUrl ?? "",
+            moderators: Self.list(moderators).map { $0.hasPrefix("@") ? String($0.dropFirst()) : $0 },
+            mutedWords: Self.list(mutedWords),
+            explicit: explicit,
+            shipping: ShowShipping(freePickup: freePickup, shippingCap: cap.isEmpty ? nil : Double(cap)))
         Task {
             defer { busy = false }
             do {
-                let result = try await APIClient.shared.createStream(input)
+                let result: StreamResponse
+                if let existing { result = try await APIClient.shared.updateStream(id: existing.id, input) }
+                else { result = try await APIClient.shared.createStream(input) }
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
-                onCreated(result.stream)
+                onSaved(result.stream)
                 dismiss()
             } catch {
                 message = error.localizedDescription
@@ -200,6 +325,7 @@ struct ShowManagerView: View {
     @State private var showPicker = false
     @State private var confirmCancel = false
     @State private var working = false
+    @State private var editing = false
 
     var body: some View {
         ScrollView {
@@ -232,6 +358,24 @@ struct ShowManagerView: View {
         }
         .navigationTitle("Show")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if let stream {
+                if let link = stream.shareUrl.flatMap(URL.init(string:)) {
+                    ToolbarItem(placement: .primaryAction) {
+                        ShareLink(item: link, subject: Text(stream.title), message: Text(stream.title)) { Image(systemName: "square.and.arrow.up") }
+                            .accessibilityLabel("Share show")
+                    }
+                }
+                if stream.isScheduled {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Edit") { editing = true }.accessibilityIdentifier("show-edit")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $editing) {
+            if let stream { ScheduleShowSheet(existing: stream) { _ in Task { await load(); onChange() } } }
+        }
         .mmScreen()
         .task { await load() }
         .sheet(isPresented: $showPicker) {
@@ -255,7 +399,19 @@ struct ShowManagerView: View {
                 else { Pill(text: stream.status == "ended" ? "Ended" : "Scheduled", systemImage: "calendar") }
                 Pill(text: LocalizedStringKey(String(localized: Catalog.category(stream.category).label)), systemImage: Catalog.category(stream.category).symbol, tint: MM.Color.ink2)
             }
+            if let cover = stream.posterUrl, !cover.isEmpty {
+                ArtworkView(source: cover, symbol: Catalog.category(stream.category).symbol)
+                    .frame(maxWidth: .infinity).frame(height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: MM.Radius.md, style: .continuous))
+            }
             Text(stream.title).font(MM.Font.display(24)).foregroundStyle(MM.Color.ink)
+            HStack(spacing: 12) {
+                if let count = stream.reminderCount, stream.isScheduled {
+                    Label("\(count) saved", systemImage: "bell.fill").font(MM.Font.body(13)).foregroundStyle(MM.Color.gold)
+                }
+                if stream.visibility == "private" { Label("Private", systemImage: "lock.fill").font(MM.Font.body(13)).foregroundStyle(MM.Color.ink2) }
+                if stream.seriesId != nil { Label("Part of a series", systemImage: "repeat").font(MM.Font.body(13)).foregroundStyle(MM.Color.ink2) }
+            }
             if let date = stream.startDate {
                 Label(date.formatted(.dateTime.weekday(.wide).month().day().hour().minute()), systemImage: "clock")
                     .font(MM.Font.body(14)).foregroundStyle(MM.Color.ink2)

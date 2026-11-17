@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { io } from 'socket.io-client';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.MM_SHOWS_PORT ?? 4690);
@@ -216,6 +217,78 @@ const cancelOther = await call(API, `/api/streams/${otherShowId}`, { method: 'DE
 check(cancelOther.status === 404, 'an outsider cannot cancel the show');
 const cancel = await call(API, `/api/streams/${otherShowId}`, { method: 'DELETE', headers: as(SELLER) });
 check(cancel.status === 200 && cancel.json?.stream?.status === 'ended', 'the host cancels a scheduled show');
+
+/* ── 8. Guided scheduling (phase 2) ───────────────────────────────────── */
+section('8. A schedule of shows is created in one step');
+const day = 86_400_000;
+const at = (days, hour = 19) => { const d = new Date(Date.now() + days * day); d.setUTCHours(hour, 0, 0, 0); return d.toISOString(); };
+const batch = (body, who = SELLER) => call(API, '/api/streams/batch', { method: 'POST', headers: as(who), body });
+const template = { title: 'Weekly candy drop', categoryId: 'food', subcategoryId: 'food.snacks', format: 'auction', mutedWords: ['SPAM', 'scam'], moderators: [OTHER], shipping: { freePickup: true, shippingCap: 10 }, explicit: false };
+const series = await batch({ show: template, startTimes: [at(2), at(4), at(9), at(11)] });
+check(series.status === 201 && series.json?.streams?.length === 4, 'four shows are scheduled at once', `${series.status}`);
+check(series.json?.streams?.every((st) => st.seriesId && st.seriesId === series.json.seriesId), 'they share one series id');
+const first = series.json?.streams?.[0];
+check(first?.mutedWords?.includes('spam'), 'the host sees muted words, normalised to lower case');
+check(first?.moderators?.[0]?.id === OTHER, 'moderators are resolved to accounts');
+check(first?.shipping?.shippingCap === 10 && first?.shipping?.freePickup === true, 'shipping options are stored');
+check(typeof first?.shareUrl === 'string' && first.shareUrl.endsWith(`/stream/${first.id}`), 'each show has a share link', first?.shareUrl);
+const tooClose = await batch({ show: template, startTimes: [at(3), new Date(Date.parse(at(3)) + 10 * 60_000).toISOString()] });
+check(tooClose.status === 400, 'shows less than 30 minutes apart are refused');
+const oneBad = await batch({ show: template, startTimes: [at(5), new Date(Date.now() - day).toISOString()] });
+check(oneBad.status === 400, 'one bad time refuses the whole batch');
+const afterBad = (await call(API, '/api/me/streams', { headers: as(SELLER) })).json?.upcoming ?? [];
+check(!afterBad.some((st) => Date.parse(st.scheduledStartTime) === Date.parse(at(5))), 'nothing from a refused batch was saved');
+check((await batch({ show: template, startTimes: [] })).status === 400, 'an empty schedule is refused');
+check((await batch({ show: { ...template, moderators: ['nobody_here_123'] }, startTimes: [at(6)] })).status === 400, 'an unknown moderator is refused');
+
+section('9. Private details stay private');
+const publicShow = (await call(API, `/api/streams/${first.id}`)).json;
+const publicText = JSON.stringify(publicShow ?? {});
+check(!publicText.includes('mutedWords') && !publicText.includes('reminderUserIds'), 'viewers never see muted words or who saved the show');
+const privateShow = await create({ title: 'Invite-only drop', visibility: 'private' });
+const listed = (await call(API, '/api/streams')).json?.items ?? [];
+check(!listed.some((st) => st.id === privateShow.json?.stream?.id), 'a private show is not listed publicly');
+check((await call(API, `/api/streams/${privateShow.json?.stream?.id}`)).status === 200, 'a private show still opens from its link');
+
+section('10. Viewers save a show and hear when it starts');
+const remind = (sid, who, on = true) => call(API, `/api/streams/${sid}/remind`, { method: 'POST', headers: as(who), body: { on } });
+const saved1 = await remind(first.id, OTHER);
+check(saved1.status === 200 && saved1.json?.reminded === true && saved1.json?.reminderCount === 1, 'a viewer saves the show', `${saved1.status}`);
+check((await remind(first.id, OTHER)).json?.reminderCount === 1, 'saving twice does not double count');
+check((await call(API, `/api/streams/${first.id}`, { headers: as(OTHER) })).json?.reminded === true, 'the viewer sees it as saved');
+check((await remind(first.id, SELLER)).status === 400, 'the host cannot save their own show');
+const noteListing = await listing({ title: 'Reminder lot', categoryId: 'food', subcategoryId: 'food.snacks' });
+await add(first.id, noteListing.json?.auction?.id);
+const before = ((await call(API, '/api/notifications', { headers: as(OTHER) })).json?.items ?? []).length;
+await call(API, `/api/streams/${first.id}/items/${noteListing.json?.auction?.id}/activate`, { method: 'POST', headers: as(SELLER) });
+const inbox = (await call(API, '/api/notifications', { headers: as(OTHER) })).json?.items ?? [];
+check(inbox.length === before + 1 && inbox[0]?.href === `/stream/${first.id}`, 'the saved viewer is notified when it goes live', `${before} → ${inbox.length}`);
+check((await remind(first.id, OTHER, false)).status === 409, 'a live show can no longer be saved or unsaved');
+const unsave = await remind(series.json.streams[1].id, OTHER);
+const unsaved = await remind(series.json.streams[1].id, OTHER, false);
+check(unsave.json?.reminderCount === 1 && unsaved.json?.reminderCount === 0 && unsaved.json?.reminded === false, 'a viewer can unsave a show');
+
+section('11. Muted words are held back in chat');
+const chatShow = series.json.streams[2];
+const tokenFor = async (userId) => (await call(API, '/api/dev/token', { method: 'POST', body: { userId } })).json?.token;
+const viewerToken = await tokenFor(OTHER);
+const spy = io(API, { transports: ['websocket'], forceNew: true });
+const talker = io(API, { transports: ['websocket'], forceNew: true, auth: { token: viewerToken } });
+await Promise.all([spy, talker].map((sock) => new Promise((resolve) => sock.on('connect', resolve))));
+const heard = [];
+spy.on('chat:message', (message) => heard.push(message.body));
+spy.emit('stream:join', chatShow.id);
+talker.emit('stream:join', chatShow.id);
+await new Promise((resolve) => setTimeout(resolve, 300));
+talker.emit('chat:send', { streamId: chatShow.id, userId: OTHER, displayName: 'x', body: 'This is a SCAM listing' });
+talker.emit('chat:send', { streamId: chatShow.id, userId: OTHER, displayName: 'x', body: 'Love this candy' });
+await new Promise((resolve) => setTimeout(resolve, 600));
+check(heard.includes('Love this candy'), 'ordinary chat reaches the room', heard.join(' | '));
+check(!heard.some((body) => body.toLowerCase().includes('scam')), 'a message with a muted word is not broadcast');
+const stored = JSON.stringify((await call(API, `/api/streams/${chatShow.id}`)).json?.chat ?? []);
+check(!stored.toLowerCase().includes('scam'), 'and it is not stored');
+spy.close();
+talker.close();
 
 const colour = fail ? '\u001b[31m' : '\u001b[32m';
 console.log(`\n  ${colour}PASSED ${pass}   FAILED ${fail}\u001b[0m`);

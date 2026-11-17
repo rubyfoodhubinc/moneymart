@@ -210,6 +210,13 @@ export interface StreamPlayback {
 }
 
 export type ShowFormat = 'auction' | 'buy_now' | 'mixed';
+
+export interface ShowShipping {
+  /** Buyers may collect in person instead of paying for shipping. */
+  freePickup: boolean;
+  /** Most a buyer pays in shipping across everything they win in this show. */
+  shippingCap?: number;
+}
 export type ShowVisibility = 'public' | 'private';
 
 export interface Stream {
@@ -224,6 +231,17 @@ export interface Stream {
   /** BCP-47 tag of the language the host will speak. */
   language?: string;
   createdAt?: ISODate;
+  /** Shows created together from one schedule share a series id. */
+  seriesId?: string;
+  /** Accounts the host trusts to moderate chat. */
+  moderatorIds?: string[];
+  /** Host-only: chat messages containing these words are held back. */
+  mutedWords?: string[];
+  /** The host flagged mature content; viewers see a warning first. */
+  explicit?: boolean;
+  shipping?: ShowShipping;
+  /** Host-private: accounts to notify when the show goes live. */
+  reminderUserIds?: string[];
   scheduledStartTime: ISODate;
   actualStartTime?: ISODate;
   endTime?: ISODate;
