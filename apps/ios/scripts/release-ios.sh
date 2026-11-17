@@ -5,8 +5,9 @@
 # Uploading never submits for App Review.
 #
 # Signing: team R7A65YU39K (Apple Distribution: RUBYNAV INC), automatic. The archive uses the App Store Connect
-# API key in ~/.appstoreconnect (private_keys/AuthKey_<ASC_KEY_ID>.p8 + issuer_id); the export/upload uses the
-# Apple account signed in to Xcode. The build number is the next free number in App Store Connect.
+# API key in ~/.appstoreconnect (private_keys/AuthKey_<ASC_KEY_ID>.p8 + issuer_id), and so does the export/upload,
+# so a release does not depend on Xcode's Apple Account session staying signed in.
+# The build number is the next free number in App Store Connect.
 # Same pattern as the other RubyNav apps' release scripts.
 set -u
 ROOT=${0:A:h:h}
@@ -69,7 +70,7 @@ if [ "${UPLOAD:-0}" = 1 ]; then
 </dict></plist>
 PLIST
   xcodebuild -exportArchive -archivePath $ARCHIVE -exportOptionsPlist $EXPORT_OPTIONS \
-    -exportPath $DATA/Export-$BUILD -allowProvisioningUpdates >> $LOG 2>&1 \
+    -exportPath $DATA/Export-$BUILD "${AUTH[@]}" >> $LOG 2>&1 \
     && echo "UPLOAD OK $(date +%T) MoneyMart $VERSION ($BUILD)" | tee -a $LOG || { echo "UPLOAD FAILED (see $LOG)" | tee -a $LOG; exit 1; }
 fi
 echo "DONE $(date +%T)" | tee -a $LOG
