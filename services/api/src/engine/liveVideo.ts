@@ -229,7 +229,9 @@ async function cloudflare<T>(method: string, path: string, payload?: Record<stri
 export async function createRoom(provider: LiveVideoProviderId, showId: string, title: string): Promise<LiveRoom> {
   const name = `mm-${showId}`.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 128);
   if (provider === 'ivs') {
-    const result = await ivs<{ stage?: { arn?: string } }>('CreateStage', { name, tags: { app: 'moneymart', show: showId.slice(0, 256) } });
+    // No tags: tagging needs the extra ivs:TagResource permission, and the stage
+    // name already identifies the show.
+    const result = await ivs<{ stage?: { arn?: string } }>('CreateStage', { name });
     const arn = result?.stage?.arn;
     if (!arn) throw new LiveVideoError('ivs', 'bad_response', 'Amazon IVS returned no stage');
     return { provider, roomId: arn, createdAt: new Date().toISOString() };
