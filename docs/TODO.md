@@ -13,6 +13,7 @@
   `.railway/railway.ts` and redeploy.
 
 ## Live commerce (see docs/live-commerce-spec.md)
-- [ ] iOS: go-live host screen and live viewer for Amazon IVS (kit 1.48.1 in
-  /Volumes/MAC5/Development/Vendor) and Cloudflare (WebView WHIP/WHEP).
+- [x] iOS: go-live host screen and live viewer for Amazon IVS and Cloudflare (2026-11-17).
+- [ ] Test broadcasting from a real iPhone (the Simulator has no camera): go live on
+  IVS, then "Switch to backup video" to Cloudflare, and watch from a second phone.
 - [ ] Translate new category names and seller/show screens into the app's 7 other languages.
