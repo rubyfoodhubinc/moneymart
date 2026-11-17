@@ -22,6 +22,10 @@ import {
 } from './president.js';
 import { audit, boardMeetings, presChat, presPosts, store, users, type PresPost } from '../store.js';
 import { closeMeeting, openMeeting, ownerSays, view } from './boardroom.js';
+import { oreTurn } from './ore.js';
+import { speak, voiceConfigured } from './voice.js';
+
+const speakLog = new Map<string, number[]>();
 
 type ActorFn = (req: Request) => string;
 
@@ -64,23 +68,6 @@ const AI_PROVIDERS: { id: string; label: string; env: string[]; also?: string[] 
   { id: 'didit_kyb', label: 'Didit — business checks (KYB)', env: ['DIDIT_API_KEY'], also: ['DIDIT_KYB_WORKFLOWID_KEY'] },
   { id: 'resend', label: 'Resend (email)', env: ['RESEND_API_KEY'] },
 ];
-
-const ORE_TOOLS: ToolDef[] = [
-  {
-    name: 'report_to_president',
-    description: "Pass the member's request up to President Ore: a feature they want, a problem or bug, or feedback. Anonymous; similar requests are merged.",
-    input_schema: {
-      type: 'object',
-      properties: { kind: { type: 'string', enum: ['feature', 'problem', 'feedback'] }, title: { type: 'string' }, detail: { type: 'string' } },
-      required: ['kind', 'title'],
-    },
-  },
-];
-
-const ORE_SYSTEM = () => `You are Ore, the member's own assistant inside MoneyMart — a live shopping marketplace where anyone can buy and sell in live auction shows and listings, in every category. You are warm, brief and practical.
-You help buyers find items and shows and understand bidding, Buy It Now, fees, shipping and orders; you help sellers list items, schedule shows, run items live and price well.
-You cannot take actions for the member in this chat; tell them where to tap in the app. Never invent prices, policies or features. Never ask for passwords, card numbers or codes.
-When the member wants something MoneyMart doesn't do, has a problem, or gives feedback, use report_to_president and tell them it has gone to President ${presidentName()}.${directivesBlock()}`;
 
 export function mountAiRoutes(app: Express, actorId: ActorFn): void {
   app.get('/api/admin/me', (req, res) => {
@@ -253,12 +240,14 @@ export function mountAiRoutes(app: Express, actorId: ActorFn): void {
 
   /* Ore, the member's assistant */
   app.get('/api/ore/status', (req, res) => {
-    res.json({ enabled: Boolean(valueOf('features.ore')), available: providerConfigured('anthropic', 'ore') || providerConfigured(seatOf('ore').provider, 'ore'), president: presidentName() });
+    const voice = voiceConfigured();
+    res.json({ enabled: Boolean(valueOf('features.ore')), available: providerConfigured('anthropic', 'ore') || providerConfigured(seatOf('ore').provider, 'ore'), president: presidentName(), voice: voice.cartesia || voice.elevenlabs });
   });
 
   app.post('/api/ore/chat', async (req, res) => {
     const userId = actorId(req);
-    if (!userId || !users.get(userId)) {
+    const user = userId ? users.get(userId) : undefined;
+    if (!user) {
       res.status(401).json({ error: 'sign_in' });
       return;
     }
@@ -266,56 +255,49 @@ export function mountAiRoutes(app: Express, actorId: ActorFn): void {
       res.status(503).json({ error: 'ore_off' });
       return;
     }
-    const text = String(req.body?.text ?? '').trim().slice(0, 2000);
-    if (!text) {
+    const text = String(req.body?.text ?? '').trim().slice(0, 4000);
+    const hasFiles = Array.isArray(req.body?.attachments) && req.body.attachments.length > 0;
+    if (!text && !hasFiles) {
       res.status(400).json({ error: 'empty' });
       return;
     }
-    const history = (Array.isArray(req.body?.history) ? (req.body.history as { role?: string; text?: string }[]) : [])
-      .slice(-10)
-      .map((m): Message => ({ role: m.role === 'ore' ? 'assistant' : 'user', content: String(m.text ?? '').slice(0, 2000) }))
-      .filter((m) => (m.content as string).length > 0);
-    while (history.length && history[0]!.role !== 'user') history.shift();
-    const messages: Message[] = [...history, { role: 'user', content: text }];
-    // Merge consecutive same-role turns (the API wants alternation).
-    const merged: Message[] = [];
-    for (const m of messages) {
-      const last = merged[merged.length - 1];
-      if (last && last.role === m.role && typeof last.content === 'string') last.content = `${last.content}\n\n${m.content as string}`;
-      else merged.push({ ...m });
+    const result = await oreTurn({
+      user,
+      text,
+      history: Array.isArray(req.body?.history) ? (req.body.history as { role: string; text: string }[]) : [],
+      attachments: req.body?.attachments,
+      voice: req.body?.voice === true,
+      device: String(req.header('x-mm-platform') ?? req.header('x-moneymart-client') ?? 'app'),
+    });
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error, reply: result.reply, detail: result.reply });
+      return;
     }
+    res.json({ reply: result.reply, reported: result.reported.map((r) => ({ id: r.id, title: r.title })) });
+  });
 
-    const reported: PresPost[] = [];
-    for (let step = 0; step < 3; step++) {
-      const result = await call({ seat: 'ore', role: 'ore', system: ORE_SYSTEM(), tools: ORE_TOOLS, messages: merged, maxTokens: 800 });
-      if (!result.ok) {
-        res.status(503).json({ error: 'ore_unavailable', reply: "I can't answer right now — please try again in a moment." });
-        return;
-      }
-      merged.push({ role: 'assistant', content: result.content });
-      if (!result.toolUses.length) {
-        res.json({ reply: result.text.trim(), reported: reported.map((r) => ({ id: r.id, title: r.title })) });
-        return;
-      }
-      const results: Block[] = [];
-      for (const use of result.toolUses.slice(0, 3)) {
-        if (use.name === 'report_to_president' && reported.length < 3) {
-          const post = fileRequest({
-            kind: String(use.input.kind ?? 'feedback'),
-            title: String(use.input.title ?? '').slice(0, 160) || 'Member request',
-            body: String(use.input.detail ?? ''),
-            memberId: userId,
-            device: String(req.header('x-mm-platform') ?? req.header('x-moneymart-client') ?? 'app'),
-          });
-          reported.push(post);
-          results.push({ type: 'tool_result', tool_use_id: use.id, content: 'Sent to President Ore.' });
-        } else {
-          results.push({ type: 'tool_result', tool_use_id: use.id, is_error: true, content: 'Not available.' });
-        }
-      }
-      merged.push({ role: 'user', content: results });
+  /** Ore's voice for calls: MP3, or 204 when no voice provider answers (the app then uses the phone's voice). */
+  app.post('/api/ore/speak', async (req, res) => {
+    const userId = actorId(req);
+    if (!userId || !users.get(userId)) {
+      res.status(401).json({ error: 'sign_in' });
+      return;
     }
-    res.json({ reply: 'I’ve passed that on to President Ore.', reported: reported.map((r) => ({ id: r.id, title: r.title })) });
+    const now = Date.now();
+    const recent = (speakLog.get(userId) ?? []).filter((t) => now - t < 3_600_000);
+    if (recent.length >= 300) {
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+    speakLog.set(userId, [...recent, now]);
+    const spoken = await speak(String(req.body?.text ?? ''));
+    if (!spoken) {
+      res.status(204).end();
+      return;
+    }
+    res.setHeader('content-type', 'audio/mpeg');
+    res.setHeader('x-ore-voice', spoken.provider);
+    res.send(spoken.audio);
   });
 
 }

@@ -301,8 +301,9 @@ extension APIClient {
 
     // MARK: Ore (member assistant)
 
-    struct OreStatus: Decodable, Sendable { var enabled: Bool; var available: Bool; var president: String }
+    struct OreStatus: Decodable, Sendable { var enabled: Bool; var available: Bool; var president: String; var voice: Bool? }
     struct OreTurn: Encodable, Sendable { let role: String; let text: String }
+    struct OreAttachment: Encodable, Sendable { let name: String; let mediaType: String; let data: String }
     struct OreReply: Decodable, Sendable {
         struct Reported: Decodable, Sendable { var id: String; var title: String }
         var reply: String
@@ -311,10 +312,25 @@ extension APIClient {
 
     func oreStatus() async throws -> OreStatus { try await get("/api/ore/status") }
 
-    /// Ore can take a few model steps (answer, report up, answer), so she gets a longer timeout than other calls.
-    func askOre(text: String, history: [OreTurn]) async throws -> OreReply {
-        struct B: Encodable, Sendable { let text: String; let history: [OreTurn] }
-        return try await send("/api/ore/chat", method: "POST", body: try encoder.encode(B(text: text, history: history)), timeout: 60)
+    /// Ore can take a few model steps (look up the account, answer, report up), and may read attachments,
+    /// so she gets a longer timeout than other calls.
+    func askOre(text: String, history: [OreTurn], attachments: [OreAttachment] = [], voice: Bool = false) async throws -> OreReply {
+        struct B: Encodable, Sendable { let text: String; let history: [OreTurn]; let attachments: [OreAttachment]; let voice: Bool }
+        return try await send("/api/ore/chat", method: "POST", body: try encoder.encode(B(text: text, history: history, attachments: attachments, voice: voice)), timeout: 90)
+    }
+
+    /// Ore's voice as MP3, or nil when the server has no voice (the app then uses the phone's own voice).
+    func oreSpeech(_ text: String) async -> Data? {
+        struct B: Encodable { let text: String }
+        var request = URLRequest(url: AppConfig.apiBaseURL.appending(path: "/api/ore/speak"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 25
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        request.httpBody = try? encoder.encode(B(text: text))
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return nil }
+        return data
     }
 }
 

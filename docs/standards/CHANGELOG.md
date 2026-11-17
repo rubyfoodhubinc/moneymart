@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2 — 2026-11-17
+
+- Local AI becomes the member's chief of staff: embedded platform guide, account snapshot as buyer and seller, read-only account and marketplace tools with in-app links (§5.1).
+- Attachments: photos, PDFs and text files (§5.1, §6.3).
+- Voice: `/speak` with Cartesia → ElevenLabs → phone voice; calls with listen → think → speak (§5.4, §5.6).
+- App layout: greeting, composer with + / mic / send-or-call, recents drawer, chats stored per account on the device (§5.6).
+
 ## 1.1 — 2026-11-17
 
 - Boardroom: round table chaired by the President, each head on its own model; private rooms; the Owner interjects; one round at a time; minutes to Reports; proposals filed as drafts (§4.7, §6.2a, §7.9).

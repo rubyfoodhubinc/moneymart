@@ -35,6 +35,7 @@ export const SETTINGS: SettingDef[] = [
   { key: 'shows.default_timer', label: 'Default item timer (seconds)', group: 'shows', defaultValue: 15, check: int(5, 120) },
   { key: 'notifications.show_starting', label: 'Tell saved viewers when a show starts', group: 'notifications', defaultValue: true, check: bool },
   { key: 'notifications.daily_tips', label: 'Daily tips to members', group: 'notifications', defaultValue: false, check: bool },
+  { key: 'ore.voice_id', label: 'Ore voice (Cartesia voice id)', group: 'features', defaultValue: '9626c31c-bec5-4cca-baa8-f8ba9e84c8bc', check: text(64) },
   { key: 'president.name', label: "President's name", group: 'president', defaultValue: 'Ore', check: text(30) },
   { key: 'president.brief_hour_utc', label: 'Daily briefing hour (UTC)', group: 'president', defaultValue: 12, check: int(0, 23) },
   { key: 'ai.seats', label: 'AI model per role', group: 'ai', defaultValue: {}, check: objectValue },

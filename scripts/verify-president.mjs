@@ -71,6 +71,15 @@ function respond(body) {
     return say(JSON.stringify({ kind: 'draft_member_message', title: 'Fees are lower this week', body: 'Sellers keep more of every sale this week. List an item or schedule a show to try it — nothing to switch on. Thanks for selling on MoneyMart.', remember: 'Owner likes short member messages' }));
   }
   if (system.startsWith('You are Ore')) {
+    const lastMsg = body.messages[body.messages.length - 1];
+    const blocks = Array.isArray(lastMsg.content) ? lastMsg.content : [];
+    const images = blocks.filter((b) => b.type === 'image').length;
+    const docs = blocks.filter((b) => b.type === 'document').length;
+    if (images || docs) return say(`I can see your files (${images} image, ${docs} pdf).`);
+    if (first && system.includes('This is a voice call')) return say('Voice answer, short.');
+    if (first && text.includes('my bids')) return tool('my_bids', {});
+    if (first && text.includes('live show')) return tool('shows', { when: 'both' });
+    if (!first && !text.includes('Sent to President')) return say(`Here is what I found: ${text.slice(0, 600)}`);
     if (first) return tool('report_to_president', { kind: 'feature', title: 'Dark mode', detail: text.slice(0, 200) });
     return say('I’ve passed that to President Ore.');
   }
@@ -92,10 +101,17 @@ function respond(body) {
   return say('?');
 }
 
+const spoken = [];
 const mock = createServer(async (req, res) => {
   let raw = '';
   for await (const chunk of req) raw += chunk;
   const body = JSON.parse(raw || '{}');
+  if (req.url === '/tts/bytes') {
+    spoken.push({ key: req.headers['x-api-key'], body });
+    res.writeHead(200, { 'content-type': 'audio/mpeg' });
+    res.end(Buffer.from('ID3-fake-mp3'));
+    return;
+  }
   seen.push({ key: req.headers['x-api-key'], body });
   const reply = respond(body);
   res.writeHead(200, { 'content-type': 'application/json' });
@@ -116,6 +132,9 @@ const child = spawn(process.execPath, [entry], {
     ANTHROPIC_API_KEY: 'test-member-key',
     MM_ANTHROPIC_BASE: `http://127.0.0.1:${MOCK_PORT}/v1/messages`,
     MM_DIRECTIVE_SECRET: 'test-directive-secret',
+    CARTESIA_API_KEY: 'test-cartesia',
+    MM_CARTESIA_BASE: `http://127.0.0.1:${MOCK_PORT}`,
+    ELEVENLABS_API_KEY: '',
     RESEND_API_KEY: '',
     MM_OWNER_EMAILS: '',
   },
@@ -301,6 +320,44 @@ const list = await call('/api/admin/boardroom', { headers: as(OWNER) });
 check(list.json?.meetings?.length === 2, 'past meetings are listed');
 const log2 = new Set(((await call('/api/admin/audit', { headers: as(OWNER) })).json?.entries ?? []).map((e) => e.action));
 check(log2.has('boardroom_open') && log2.has('boardroom_close'), 'meetings are in the audit log');
+
+
+/* ── 10 ── */
+section('10. Ore is the member’s chief of staff');
+const ask = (body, who = MEMBER) => call('/api/ore/chat', { method: 'POST', headers: as(who), body });
+const liveLots = (await call('/api/auctions?status=live', { headers: as(MEMBER) })).json?.items ?? [];
+const target = liveLots.find((a) => a.sellerId !== MEMBER && !a.streamId);
+const placed = target ? await call(`/api/auctions/${target.id}/bids`, { method: 'POST', headers: as(MEMBER), body: { amount: target.currentBid + 1000 } }) : null;
+const bidsReply = await ask({ text: 'What is happening with my bids?' });
+check(placed?.status === 200 && (bidsReply.json?.reply ?? '').includes(`moneymart://lot/${target.id}`) && (bidsReply.json?.reply ?? '').includes('"winning":true'), 'her bid lookup has the member’s real bid, winning, with a link', target?.id);
+const lastOre = seen.filter((x) => String(x.body.system).startsWith('You are Ore')).at(-1);
+const sys = String(lastOre?.body.system ?? '');
+check(bidsReply.status === 200 && /Here is what I found/.test(bidsReply.json?.reply ?? ''), 'Ore looks up the member’s own bids', (bidsReply.json?.reply ?? '').slice(0, 90));
+check(sys.includes('MONEYMART GUIDE') && sys.includes('buyer\'s premium') && sys.includes('Minimum steps'), 'the whole platform guide is embedded in her');
+check(/MEMBER \(the person you are helping/.test(sys) && sys.includes('Buyer:') && sys.includes('Seller:'), 'she sees the member’s account as buyer and seller');
+const toolNames = new Set((lastOre?.body.tools ?? []).map((t) => t.name));
+check(['my_orders', 'my_bids', 'my_listings', 'my_shows', 'my_payouts', 'my_notifications', 'search_marketplace', 'shows', 'report_to_president'].every((n) => toolNames.has(n)), 'she has tools for orders, bids, listings, shows, payouts, notifications and the marketplace');
+const showsReply = await ask({ text: 'Find me a live show' });
+check(/moneymart:\/\/stream\//.test(showsReply.json?.reply ?? ''), 'shows come back with links that open in the app');
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const PDF = Buffer.from('%PDF-1.4 receipt').toString('base64');
+const files = await ask({ text: 'What is this?', attachments: [{ name: 'item.png', mediaType: 'image/png', data: PNG }, { name: 'receipt.pdf', mediaType: 'application/pdf', data: PDF }] });
+check(files.status === 200 && files.json?.reply === 'I can see your files (1 image, 1 pdf).', 'she reads attached photos and PDFs', files.json?.reply);
+const fileText = await ask({ text: 'Summarise', attachments: [{ name: 'notes.csv', mediaType: 'text/csv', data: Buffer.from('item,price\nwatch,100').toString('base64') }] });
+const csvSent = JSON.stringify(seen.at(-1)?.body.messages ?? '');
+check(fileText.status === 200 && csvSent.includes('ATTACHED FILE \\"notes.csv\\"') && csvSent.includes('watch,100'), 'text files are read inline, marked as data');
+const exe = await ask({ text: 'run this', attachments: [{ name: 'app.exe', mediaType: 'application/x-msdownload', data: 'TVqQAAMAAAAEAAAA' }] });
+check(exe.status === 400 && /photos, PDFs and text files/.test(exe.json?.detail ?? ''), 'other file types are refused with a reason');
+const five = await ask({ text: 'x', attachments: Array.from({ length: 5 }, (_, i) => ({ name: `p${i}.png`, mediaType: 'image/png', data: PNG })) });
+check(five.status === 400, 'at most four attachments at a time');
+const voiceReply = await ask({ text: 'hello', voice: true });
+check(voiceReply.json?.reply === 'Voice answer, short.' && String(seen.at(-1)?.body.system).includes('This is a voice call'), 'calls get short spoken answers');
+const status = await call('/api/ore/status', { headers: as(MEMBER) });
+check(status.json?.voice === true, 'Ore reports that her voice is available');
+const audio = await fetch(`${API}/api/ore/speak`, { method: 'POST', headers: { 'content-type': 'application/json', ...as(MEMBER) }, body: JSON.stringify({ text: '**Bid** on it here moneymart://lot/abc now' }) });
+const spokenBody = spoken.at(-1)?.body;
+check(audio.status === 200 && audio.headers.get('content-type') === 'audio/mpeg' && audio.headers.get('x-ore-voice') === 'cartesia', 'Ore speaks with her Cartesia voice');
+check(spokenBody?.transcript === 'Bid on it here now' && spokenBody?.voice?.id && spoken.at(-1)?.key === 'test-cartesia', 'speech is cleaned of markdown and links before it is spoken', spokenBody?.transcript);
 
 const colour = fail ? '\u001b[31m' : '\u001b[32m';
 console.log(`\n  ${colour}PASSED ${pass}   FAILED ${fail}\u001b[0m`);

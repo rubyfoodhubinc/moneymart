@@ -113,9 +113,7 @@ struct RootView: View {
         .sheet(isPresented: $router.showSignIn) {
             AuthView().presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $router.showOre) {
-            OreChatView().presentationDragIndicator(.visible)
-        }
+        .fullScreenCover(isPresented: $router.showOre) { OreChatView() }
     }
 }
 

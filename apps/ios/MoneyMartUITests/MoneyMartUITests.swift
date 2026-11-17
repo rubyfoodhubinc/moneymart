@@ -236,7 +236,8 @@ final class MoneyMartUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rows.count, before + 3, "the series is scheduled in one step")
     }
 
-    /// Ore, the member's assistant: opens from Home, answers, and reports a request up to President Ore.
+    /// Ore, the member's chief of staff: opens full screen from Home with a greeting, answers, reports a request
+    /// up to President Ore, keeps the chat in Recents, and offers attachments and a call.
     /// Needs a local API whose Claude base points at a stand-in (see scripts/verify-president.mjs).
     func testOreAnswersAndReportsUp() async throws {
         try await prepareLocalGateway()
@@ -248,23 +249,44 @@ final class MoneyMartUITests: XCTestCase {
         XCTAssertTrue(open.waitForExistence(timeout: 10), "Ore shows when the server has her switched on")
         open.tap()
 
-        let suggestion = app.buttons["ore-suggestion-0"]
-        XCTAssertTrue(suggestion.waitForExistence(timeout: 5), "a new chat offers suggestions")
-        suggestion.tap()
-        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'bid'")).matching(NSPredicate(format: "label CONTAINS 'Bidding is simple'")).firstMatch
+        let greeting = element("ore-greeting")
+        XCTAssertTrue(greeting.waitForExistence(timeout: 5), "a new chat greets the member")
+        XCTAssertTrue(["Morning", "Afternoon", "Evening"].contains { greeting.label.hasPrefix($0) }, "the greeting follows the time of day: \(greeting.label)")
+        XCTAssertTrue(app.buttons["ore-attach"].exists, "the + menu adds photos and files")
+        XCTAssertTrue(app.buttons["ore-call"].exists, "an empty composer offers a call")
+        keep("Ore - new chat")
+
+        app.buttons["ore-suggestion-0"].tap()
+        let answer = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Bidding is simple'")).firstMatch
         XCTAssertTrue(answer.waitForExistence(timeout: 30), "Ore answers the member")
 
         let input = app.textFields["ore-input"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         input.tap()
         input.typeText("Please add dark mode")
+        XCTAssertTrue(app.buttons["ore-send"].waitForExistence(timeout: 2), "typing turns the call button into send")
         app.buttons["ore-send"].tap()
         let reported = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Sent to President'")).firstMatch
         XCTAssertTrue(reported.waitForExistence(timeout: 30), "the member sees the request went to the President")
+        keep("Ore - conversation")
+
+        app.buttons["ore-menu"].tap()
+        XCTAssertTrue(element("ore-recent").waitForExistence(timeout: 5), "the chat is kept in Recents")
+        keep("Ore - recents drawer")
+        app.buttons["ore-drawer-new"].tap()
+        XCTAssertTrue(element("ore-greeting").waitForExistence(timeout: 5), "New chat starts fresh")
 
         app.buttons["ore-done"].tap()
         app.tabBars.buttons["Profile"].tap()
         XCTAssertTrue(app.buttons["profile-ore"].waitForExistence(timeout: 5), "Ore is also in Profile")
+    }
+
+    /// Keeps a screenshot in the test result (for reviewing the design).
+    private func keep(_ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
     }
 
     private func signIn(_ identifier: String) throws {

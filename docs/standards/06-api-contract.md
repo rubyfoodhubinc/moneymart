@@ -39,8 +39,9 @@ All `/api/admin/president*` routes are owner-only.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/<local_ai>/status` | — | `{ enabled, available, president }` |
-| POST | `/api/<local_ai>/chat` | `{ text, history?: [{ role: 'member' \| 'ore', text }] }` | `{ reply, reported: [{ id, title }] }` · 401 `sign_in` · 503 `ore_off` / `ore_unavailable` |
+| GET | `/api/<local_ai>/status` | — | `{ enabled, available, president, voice }` |
+| POST | `/api/<local_ai>/chat` | `{ text, history?: [{ role: 'member' \| 'ore', text }], attachments?: [{ name, mediaType, data (base64) }], voice?: boolean }` | `{ reply, reported: [{ id, title }] }` · 400 `bad_attachment` (`detail` says why) · 401 `sign_in` · 503 `ore_off` / `ore_unavailable` |
+| POST | `/api/<local_ai>/speak` | `{ text }` | `audio/mpeg` (header `x-ore-voice: cartesia \| elevenlabs`) · 204 no voice · 429 |
 
 Optional header `x-<app>-platform: ios | android | web` is recorded on reported requests.
 

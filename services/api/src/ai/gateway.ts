@@ -89,7 +89,11 @@ export type ToolUse = { id: string; name: string; input: Record<string, unknown>
 export type Block =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+  /** A photo the member attached (base64). */
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+  /** A PDF the member attached (base64). */
+  | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string }; title?: string };
 export type Message = { role: 'user' | 'assistant'; content: string | Block[] };
 export type ToolDef = { name: string; description: string; input_schema: Record<string, unknown> };
 
@@ -216,7 +220,18 @@ export function openaiBody(model: string, input: CallInput, provider: Provider) 
       });
     } else {
       for (const r of results) messages.push({ role: 'tool', tool_call_id: r.tool_use_id, content: r.content });
-      if (text) messages.push({ role: 'user', content: text });
+      const images = m.content.filter((b): b is Extract<Block, { type: 'image' }> => b.type === 'image');
+      const docs = m.content.filter((b) => b.type === 'document').length;
+      const note = docs ? `\n[${docs} PDF attachment(s) cannot be read by this model.]` : '';
+      if (images.length) {
+        messages.push({
+          role: 'user',
+          content: [
+            ...(text || note ? [{ type: 'text', text: `${text}${note}` }] : []),
+            ...images.map((i) => ({ type: 'image_url', image_url: { url: `data:${i.source.media_type};base64,${i.source.data}` } })),
+          ],
+        });
+      } else if (text || note) messages.push({ role: 'user', content: `${text}${note}` });
     }
   }
   return {

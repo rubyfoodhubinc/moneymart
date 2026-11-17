@@ -1,4 +1,4 @@
-# AI Company Standard (v1.1)
+# AI Company Standard (v1.2)
 
 A reusable standard for running an app with an **AI President**, an **Owner console**, and a **local AI on every member's device**. Any of our apps can adopt it, and any app can be updated against it.
 

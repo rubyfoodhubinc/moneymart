@@ -54,9 +54,11 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>MoneyMart uses your camera to photograph items you are listing.</string>
+	<string>MoneyMart uses your camera to photograph items you are listing or showing to Ore.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>MoneyMart uses the microphone when you go live in a stream.</string>
+	<string>MoneyMart uses the microphone when you go live in a stream, and when you talk to Ore by voice.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>MoneyMart turns what you say into text when you dictate to Ore or call her.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>MoneyMart needs access to your photos so you can add item images to a listing.</string>
 	<key>UIApplicationSceneManifest</key>

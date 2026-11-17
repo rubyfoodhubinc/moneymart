@@ -1,7 +1,7 @@
 # 7. Conformance tests
 
 An app conforms to a version when an automated test, run against a scripted stand-in for the model API (no real key), passes every check below.
-Reference: `scripts/verify-president.mjs` (47 checks: 34 for v1.0, 13 for the v1.1 boardroom).
+Reference: `scripts/verify-president.mjs` (61 checks: 34 for v1.0, 13 for the v1.1 boardroom, 14 for the v1.2 chief of staff).
 
 ## 7.1 Access
 
@@ -76,6 +76,23 @@ Reference: `scripts/verify-president.mjs` (47 checks: 34 for v1.0, 13 for the v1
 - [ ] Past meetings are listed.
 - [ ] Meetings are in the audit log.
 
-## 7.10 Writing the stand-in
+## 7.10 Local AI as chief of staff (v1.2)
+
+- [ ] Her bid lookup has the member's real bid, winning, with a link.
+- [ ] Ore looks up the member's own bids.
+- [ ] The whole platform guide is embedded in her.
+- [ ] She sees the member's account as buyer and seller.
+- [ ] She has tools for orders, bids, listings, shows, payouts, notifications and the marketplace.
+- [ ] Shows come back with links that open in the app.
+- [ ] She reads attached photos and PDFs.
+- [ ] Text files are read inline, marked as data.
+- [ ] Other file types are refused with a reason.
+- [ ] At most four attachments at a time.
+- [ ] Calls get short spoken answers.
+- [ ] Ore reports that her voice is available.
+- [ ] Ore speaks with her server voice.
+- [ ] Speech is cleaned of markdown and links before it is spoken.
+
+## 7.11 Writing the stand-in
 
 The stand-in answers by who is speaking (the start of the system prompt) and what the owner asked (the text after `OWNER:`), returning Messages-API JSON with `content` blocks and `usage`. It records the key on every request so key separation can be checked.
