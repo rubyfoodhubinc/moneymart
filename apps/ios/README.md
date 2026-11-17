@@ -53,7 +53,10 @@ TEST_RUNNER_MM_API_URL=http://127.0.0.1:4317 xcodebuild -project MoneyMart.xcode
 
 ## Release checklist
 
-1. Set `DEVELOPMENT_TEAM` in `project.yml` and regenerate.
+1. Signing: team `R7A65YU39K` (Apple Distribution: RUBYNAV INC), automatic, set in `project.yml`.
 2. The App Store icon must have no alpha channel: `AppIcon-1024.png` is flattened onto navy.
-3. Bundle id `com.moneymart.app`. If the Expo build ever ships under the same id, this native build supersedes it.
-4. Archive: `xcodebuild -scheme MoneyMart -configuration Release -archivePath build/MoneyMart.xcarchive archive`.
+3. Bundle id `com.rubynav.moneymart` (App ID registered on team R7A65YU39K). `com.moneymart.app`, used by the Expo app config, belongs to another Apple developer account and cannot be registered.
+4. The App Store Connect app record must exist before the first upload (the API cannot create it).
+5. Release: `scripts/release-ios.sh` builds a signed archive; `UPLOAD=1 scripts/release-ios.sh` uploads it to
+   TestFlight (never submits for review). The build number is the next free one in App Store Connect.
+   `scripts/asc.py` does the lookups (`app`, `bundle`, `next-build`, `register-bundle`).

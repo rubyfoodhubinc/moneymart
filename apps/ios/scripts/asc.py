@@ -5,6 +5,7 @@ Usage:
   asc.py app <bundle-id>          print the App Store Connect app id for a bundle id (exit 2 if none)
   asc.py bundle <bundle-id>       print the registered Bundle ID resource id (exit 2 if none)
   asc.py next-build <app-id>      print the next free build number for that app
+  asc.py register-bundle <id>     register an iOS bundle id (name from BUNDLE_NAME, default MoneyMart)
 
 Credentials stay on this Mac and are never printed:
   ~/.appstoreconnect/private_keys/AuthKey_<ASC_KEY_ID>.p8 and ~/.appstoreconnect/issuer_id
@@ -43,6 +44,13 @@ def get(path: str, params: dict) -> list:
         return json.load(response)["data"]
 
 
+def post(path: str, body: dict) -> dict:
+    request = urllib.request.Request(f"{API}/{path}", data=json.dumps(body).encode(), method="POST",
+                                     headers={"Authorization": f"Bearer {token()}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)["data"]
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         print(__doc__, file=sys.stderr)
@@ -60,6 +68,16 @@ def main() -> None:
         if not match:
             sys.exit(2)
         print(match[0]["id"])
+    elif command == "register-bundle":
+        # Idempotent: prints the existing id when the identifier is already registered.
+        ids = get("bundleIds", {"filter[identifier]": value, "fields[bundleIds]": "identifier"})
+        match = [b for b in ids if b["attributes"]["identifier"] == value]
+        if match:
+            print(match[0]["id"])
+            return
+        created = post("bundleIds", {"data": {"type": "bundleIds", "attributes": {
+            "identifier": value, "name": os.environ.get("BUNDLE_NAME", "MoneyMart"), "platform": "IOS"}}})
+        print(created["id"])
     elif command == "next-build":
         builds = get("builds", {"filter[app]": value, "limit": 200, "fields[builds]": "version"})
         numbers = [int(b["attributes"]["version"]) for b in builds if b["attributes"]["version"].isdigit()]

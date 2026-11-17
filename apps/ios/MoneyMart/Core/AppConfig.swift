@@ -55,7 +55,7 @@ enum AppConfig {
 /// Session token storage. The token is a bearer credential, so it lives in the
 /// Keychain (this-device-only, after first unlock) — never in UserDefaults.
 enum TokenStore {
-    private static let service = "com.moneymart.app.session"
+    private static let service = "com.rubynav.moneymart.session"
     private static let account = "token"
 
     static func save(_ token: String) {

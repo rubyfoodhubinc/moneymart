@@ -14,7 +14,7 @@ cd $ROOT
 [ -d /Volumes/MAC5/Development ] || { echo "MAC5 is not mounted; stopping"; exit 1; }
 [ -z "$(git status --porcelain -- .)" ] || { echo "Uncommitted changes in apps/ios; release only committed source"; exit 1; }
 
-BUNDLE_ID=com.moneymart.app
+BUNDLE_ID=com.rubynav.moneymart
 TEAM=R7A65YU39K
 ASC_KEY_ID=${ASC_KEY_ID:-992P7733ZH}
 ASC_KEY=$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8

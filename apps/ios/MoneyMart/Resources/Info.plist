@@ -35,7 +35,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.moneymart.app</string>
+			<string>com.rubynav.moneymart</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>moneymart</string>
