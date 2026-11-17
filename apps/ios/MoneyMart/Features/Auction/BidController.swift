@@ -123,6 +123,31 @@ final class BidController {
         }
     }
 
+    var canBuyNow: Bool {
+        guard isOpen, let auction, let price = auction.buyItNowPrice, price > 0 else { return false }
+        return auction.currentBid < price
+    }
+
+    /// Buys at the Buy It Now price. Returns the new order id on success.
+    @discardableResult
+    func buyNow() async -> String? {
+        placing = true
+        defer { placing = false }
+        let haptic = UINotificationFeedbackGenerator()
+        do {
+            let result = try await APIClient.shared.buyNow(auctionId: auctionId)
+            auction = result.auction
+            haptic.notificationOccurred(.success)
+            banner = Banner(kind: .success, text: String(localized: "It’s yours! Check your orders for payment and shipping."))
+            return result.orderId ?? ""
+        } catch {
+            haptic.notificationOccurred(.error)
+            banner = Banner(kind: .warning, text: error.localizedDescription)
+            if let detail = try? await APIClient.shared.auction(id: auctionId) { apply(detail) }
+            return nil
+        }
+    }
+
     func setAutoBid(max: Double, aggressive: Bool) async -> Bool {
         placing = true
         defer { placing = false }

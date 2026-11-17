@@ -170,6 +170,7 @@ struct StreamView: View {
     @State private var showBidSheet = false
     @State private var showChat = true
     @State private var video = LiveVideoSession(role: .viewer)
+    @State private var confirmBuy = false
     @Environment(SessionStore.self) private var session
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
@@ -198,7 +199,21 @@ struct StreamView: View {
                 topBar
                 Spacer()
                 if showChat { ChatList(messages: room.chat).frame(maxHeight: 260) }
-                if let lot = room.lot, let auction = lot.auction { LiveLotBar(controller: lot, auction: auction) { openBid() } }
+                if let lot = room.lot, let auction = lot.auction {
+                    LiveLotBar(controller: lot, auction: auction,
+                               onBid: { quickBid(lot) }, onCustom: { openBid() }, onBuy: { confirmBuy = true })
+                        .confirmationDialog("Buy this item now?", isPresented: $confirmBuy, titleVisibility: .visible) {
+                            Button("Buy for \(Format.money(auction.buyItNowPrice ?? 0, auction.currency))") { Task { await lot.buyNow() } }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("All sales are final. You’ll pay and choose shipping in your orders.")
+                        }
+                } else if broadcasting {
+                    Label("Awaiting the next item…", systemImage: "hourglass")
+                        .font(MM.Font.body(13, weight: .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
                 composer
             }
             .padding(.horizontal, 12)
@@ -346,6 +361,13 @@ struct StreamView: View {
         }
     }
 
+    /// One-tap bid at the next amount, the way live auctions are run.
+    private func quickBid(_ lot: BidController) {
+        RequiresSignIn.run(session, router) {
+            Task { await lot.place(lot.minimumBid) }
+        }
+    }
+
     private func openBid() {
         RequiresSignIn.run(session, router) { showBidSheet = true }
     }
@@ -405,7 +427,13 @@ struct ChatRow: View {
 struct LiveLotBar: View {
     let controller: BidController
     let auction: Auction
+    /// One tap: bid the next amount.
     var onBid: () -> Void
+    /// Choose an amount or set a maximum.
+    var onCustom: () -> Void = {}
+    var onBuy: () -> Void = {}
+    /// The host sees the item, never the buttons.
+    var showsActions = true
 
     var body: some View {
         VStack(spacing: 10) {
@@ -424,19 +452,49 @@ struct LiveLotBar: View {
                         Text(Format.money(auction.displayPrice, auction.currency)).font(MM.Font.data(20)).foregroundStyle(MM.Color.gold)
                             .contentTransition(.numericText()).animation(.snappy, value: auction.currentBid)
                         if controller.isOpen { CountdownText(end: auction.endDate, size: 12) }
+                        if auction.suddenDeath == true && controller.isOpen {
+                            Label("Sudden death", systemImage: "bolt.fill").font(MM.Font.body(10, weight: .bold)).foregroundStyle(MM.Color.errorText)
+                        }
                     }
-                    Text("\(auction.bidCount) bids").font(MM.Font.body(11)).foregroundStyle(.white.opacity(0.7))
+                    Text(statusLine).font(MM.Font.body(11)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
                 }
                 Spacer()
-                Button(controller.isOpen ? "Bid \(Format.money(controller.minimumBid, auction.currency, compact: true))" : String(localized: "View lot"), action: onBid)
-                    .buttonStyle(.goldCompact)
-                    .disabled(controller.placing)
-                    .accessibilityIdentifier("stream-bid")
+                if showsActions && controller.isOpen {
+                    VStack(spacing: 6) {
+                        Button("Bid \(Format.money(controller.minimumBid, auction.currency, compact: true))", action: onBid)
+                            .buttonStyle(.goldCompact)
+                            .disabled(controller.placing)
+                            .accessibilityIdentifier("stream-bid")
+                        Button("Custom", action: onCustom)
+                            .font(MM.Font.body(12, weight: .semibold)).foregroundStyle(.white)
+                            .accessibilityIdentifier("stream-bid-custom")
+                    }
+                }
+            }
+            if showsActions && controller.canBuyNow, let price = auction.buyItNowPrice {
+                Button(action: onBuy) {
+                    Label("Buy now \(Format.money(price, auction.currency))", systemImage: "bolt.fill").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glassCompact)
+                .disabled(controller.placing)
+                .accessibilityIdentifier("stream-buy-now")
             }
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: MM.Radius.lg, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: MM.Radius.lg, style: .continuous).stroke(MM.Color.goldLine, lineWidth: 1))
         .animation(.spring, value: controller.banner)
+    }
+
+    private var statusLine: String {
+        switch auction.status {
+        case .sold:
+            return String(localized: "Sold for \(Format.money(auction.hammerPrice ?? auction.currentBid, auction.currency))")
+        case .ended:
+            return String(localized: "No sale")
+        default:
+            if auction.bidCount == 0 { return String(localized: "No bids yet — starts at \(Format.money(auction.startingPrice, auction.currency))") }
+            return auction.bidCount == 1 ? String(localized: "1 bid") : String(localized: "\(auction.bidCount) bids")
+        }
     }
 }

@@ -145,6 +145,8 @@ struct Auction: Codable, Hashable, Identifiable, Sendable {
     var streamId: String?
     var hammerPrice: Double?
     var winnerId: String?
+    /// Live show item where late bids do not add time.
+    var suddenDeath: Bool?
     var watchers: Int?
     var featured: Bool?
     var item: Item?

@@ -22,6 +22,8 @@ struct APIError: LocalizedError, Sendable, Equatable {
         case "listing_in_other_show": return String(localized: "That item is already in another show.")
         case "live_video_unavailable": return String(localized: "Live video is unavailable right now. Try again, or switch to the backup.")
         case "not_live": return String(localized: "This show is not broadcasting right now.")
+        case "item_running": return String(localized: "Wait for the item on screen to finish.")
+        case "price_locked": return String(localized: "The starting price cannot change after bidding has begun.")
         default: return nil
         }
     }
@@ -250,8 +252,18 @@ extension APIClient {
     func watch(streamId: String) async throws -> WatchResponse { try await get("/api/streams/\(streamId)/watch") }
 
     /// Puts a queued item on screen (starts its countdown).
-    func runItem(streamId: String, auctionId: String) async throws -> StreamActionResponse {
-        try await post("/api/streams/\(streamId)/items/\(auctionId)/activate", body: EmptyBody())
+    func runItem(streamId: String, auctionId: String, seconds: Int? = nil, startingPrice: Double? = nil,
+                 suddenDeath: Bool? = nil) async throws -> StreamActionResponse {
+        struct B: Encodable, Sendable { let seconds: Int?; let startingPrice: Double?; let suddenDeath: Bool? }
+        return try await post("/api/streams/\(streamId)/items/\(auctionId)/activate",
+                              body: B(seconds: seconds, startingPrice: startingPrice, suddenDeath: suddenDeath))
+    }
+
+    struct BuyNowResponse: Decodable, Sendable { var auction: Auction; var orderId: String? }
+
+    /// Buys the item at its Buy It Now price; the order is created at once.
+    func buyNow(auctionId: String) async throws -> BuyNowResponse {
+        try await post("/api/auctions/\(auctionId)/buy-now", body: EmptyBody())
     }
 
     func endStream(id: String) async throws -> StreamActionResponse { try await post("/api/streams/\(id)/end", body: EmptyBody()) }

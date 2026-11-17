@@ -6,6 +6,7 @@ struct AuctionDetailView: View {
     let auctionId: String
     @State private var controller: BidController
     @State private var showBid = false
+    @State private var confirmBuy = false
     @State private var page = 0
     @State private var translate = false
     @Environment(SessionStore.self) private var session
@@ -286,6 +287,22 @@ struct AuctionDetailView: View {
                     Text(Format.money(controller.minimumBid, auction.currency)).font(MM.Font.data(18)).foregroundStyle(MM.Color.ink)
                 }
                 Spacer()
+                if controller.canBuyNow, let price = auction.buyItNowPrice {
+                    Button {
+                        RequiresSignIn.run(session, router) { confirmBuy = true }
+                    } label: {
+                        Label(Format.money(price, auction.currency, compact: true), systemImage: "bolt.fill")
+                    }
+                    .buttonStyle(.glassCompact)
+                    .accessibilityLabel("Buy now for \(Format.money(price, auction.currency))")
+                    .accessibilityIdentifier("lot-buy-now")
+                    .confirmationDialog("Buy this item now?", isPresented: $confirmBuy, titleVisibility: .visible) {
+                        Button("Buy for \(Format.money(price, auction.currency))") { Task { await controller.buyNow() } }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("All sales are final. You’ll pay and choose shipping in your orders.")
+                    }
+                }
                 Button {
                     RequiresSignIn.run(session, router) { showBid = true }
                 } label: {

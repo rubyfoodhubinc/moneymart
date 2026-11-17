@@ -323,6 +323,12 @@ export const api = {
     request<AuctionListResponse>(`/api/auctions${qs(params)}`),
   auction: (id: string) => request<AuctionDetailResponse>(`/api/auctions/${id}`),
   auctionBids: (id: string) => request<{ bids: Bid[] }>(`/api/auctions/${id}/bids`),
+  /** Buys at the Buy It Now price; settles like a won lot and returns the order id. */
+  buyNow: (id: string) =>
+    request<{ ok: boolean; auction: AuctionWithRelations; orderId?: string }>(`/api/auctions/${id}/buy-now`, {
+      method: 'POST',
+      body: '{}',
+    }),
   placeBid: (id: string, body: { amount: number; bidderId?: string }) =>
     request<{ ok: boolean; auction: AuctionWithRelations; bids: Bid[] }>(`/api/auctions/${id}/bids`, {
       method: 'POST',

@@ -164,6 +164,8 @@ export interface Auction {
   /** Watchlist count for social proof */
   watchers: number;
   featured?: boolean;
+  /** Live show item: no extra time for late bids — the clock never moves. */
+  suddenDeath?: boolean;
 }
 
 export type BidStatus = 'pending' | 'accepted' | 'rejected' | 'outbid' | 'winning';

@@ -16,6 +16,7 @@ struct HostLiveView: View {
     @State private var confirmExit = false
     @State private var showChat = true
     @State private var draft = ""
+    @State private var runTarget: Auction?
 
     init(streamId: String, onEnded: @escaping () -> Void = {}) {
         self.streamId = streamId
@@ -44,6 +45,10 @@ struct HostLiveView: View {
             .padding(.bottom, 8)
         }
         .statusBarHidden()
+        .sheet(item: $runTarget) { lot in
+            RunItemSheet(lot: lot) { seconds, price, suddenDeath in run(lot, seconds: seconds, price: price, suddenDeath: suddenDeath) }
+                .presentationDetents([.medium])
+        }
         .task { await room.load() }
         .onDisappear {
             video.stop()
@@ -137,8 +142,7 @@ struct HostLiveView: View {
             statusBanner
             if showChat { ChatList(messages: room.chat).frame(maxHeight: 200) }
             if let lot = room.lot, let auction = lot.auction {
-                LiveLotBar(controller: lot, auction: auction) {}
-                    .allowsHitTesting(false)
+                LiveLotBar(controller: lot, auction: auction, onBid: {}, showsActions: false)
             }
             runOrder
             composer
@@ -168,7 +172,7 @@ struct HostLiveView: View {
             HStack(spacing: 8) {
                 ForEach(room.queue) { lot in
                     let onScreen = room.stream?.activeAuctionId == lot.id
-                    Button { run(lot) } label: {
+                    Button { runTarget = lot } label: {
                         HStack(spacing: 8) {
                             ArtworkView(source: lot.coverImage, symbol: Catalog.category(lot.categoryId).symbol)
                                 .frame(width: 36, height: 36)
@@ -257,12 +261,13 @@ struct HostLiveView: View {
         }
     }
 
-    private func run(_ lot: Auction) {
+    private func run(_ lot: Auction, seconds: Int, price: Double?, suddenDeath: Bool) {
         working = true
         Task {
             defer { working = false }
             do {
-                _ = try await APIClient.shared.runItem(streamId: streamId, auctionId: lot.id)
+                _ = try await APIClient.shared.runItem(streamId: streamId, auctionId: lot.id, seconds: seconds,
+                                                       startingPrice: price, suddenDeath: suddenDeath)
                 await room.load()
             } catch {
                 notice = error.localizedDescription
@@ -278,6 +283,59 @@ struct HostLiveView: View {
             video.stop()
             onEnded()
             dismiss()
+        }
+    }
+}
+
+/// How an item runs on screen: its clock, its opening price and whether late bids add time.
+struct RunItemSheet: View {
+    let lot: Auction
+    var onRun: (Int, Double?, Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var seconds = 15
+    @State private var price = ""
+    @State private var suddenDeath = false
+
+    private static let timers = [10, 15, 30, 60, 90]
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                Text(lot.title).font(MM.Font.display(20)).foregroundStyle(MM.Color.ink).lineLimit(2)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Timer").font(MM.Font.body(12, weight: .semibold)).foregroundStyle(MM.Color.ink2)
+                    Picker("Timer", selection: $seconds) {
+                        ForEach(Self.timers, id: \.self) { Text("\($0)s").tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                if lot.bidCount == 0 {
+                    InputField(title: "Starting price", text: $price, prompt: "e.g. 1", keyboard: .decimalPad)
+                        .accessibilityIdentifier("run-price")
+                }
+                Toggle(isOn: $suddenDeath) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sudden death").font(MM.Font.body(15, weight: .medium)).foregroundStyle(MM.Color.ink)
+                        Text("Late bids don’t add time. Otherwise a bid in the last seconds resets the clock to 5 seconds.")
+                            .font(MM.Font.body(12)).foregroundStyle(MM.Color.ink3)
+                    }
+                }
+                .tint(MM.Color.gold)
+                Spacer()
+                Button {
+                    let value = Double(price.replacingOccurrences(of: ",", with: "."))
+                    onRun(seconds, value, suddenDeath)
+                    dismiss()
+                } label: { Label("Run item", systemImage: "play.fill") }
+                .buttonStyle(.gold)
+                .accessibilityIdentifier("run-item")
+            }
+            .padding(MM.Space.screen)
+            .navigationTitle("Run item")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .mmScreen()
+            .onAppear { price = String(format: "%g", lot.startingPrice) }
         }
     }
 }

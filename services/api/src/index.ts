@@ -1012,6 +1012,32 @@ app.post('/api/auctions/:id/bids', (req, res) => {
   res.json({ ok: true, auction: expandAuction(req.params.id), bids: auctions.bids(req.params.id).slice(0, 40) });
 });
 
+/**
+ * Buy It Now. The buyer is the session's account (never a body field), and the
+ * sale settles through the same path as a won lot: order, escrow, fees, notices.
+ */
+app.post('/api/auctions/:id/buy-now', (req, res) => {
+  const buyer = actorId(req);
+  const user = users.get(buyer);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  const events = engine.buyItNow({ auctionId: req.params.id, buyerId: buyer, buyerHandle: user.handle });
+  if (!events.length) {
+    res.status(404).json({ error: 'auction_not_found' });
+    return;
+  }
+  broadcast(events);
+  const rejection = events.find((e) => e.type === 'rejected');
+  if (rejection && rejection.type === 'rejected') {
+    res.status(409).json(rejection.payload);
+    return;
+  }
+  const order = orders.all().find((o) => o.auctionId === req.params.id && o.buyerId === buyer);
+  res.json({ ok: true, auction: expandAuction(req.params.id), orderId: order?.id });
+});
+
 app.post('/api/auctions/:id/auto-bid', (req, res) => {
   const { maxAmount, increment, aggressive, bidderId } = req.body as {
     maxAmount: number;
@@ -1785,6 +1811,51 @@ app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
     res.status(404).json({ error: 'not_found' });
     return;
   }
+  if (auction.status === 'sold' || auction.status === 'ended' || auction.status === 'cancelled') {
+    res.status(409).json({ error: 'item_closed', detail: 'That item has already sold or closed.' });
+    return;
+  }
+  // One item on screen at a time: the current one must finish first.
+  const current = stream.activeAuctionId ? auctions.get(stream.activeAuctionId) : undefined;
+  if (current && current.id !== auction.id && current.status === 'live' && Date.parse(current.endTime) > Date.now() && stream.video) {
+    res.status(409).json({ error: 'item_running', detail: 'Wait for the item on screen to finish.' });
+    return;
+  }
+
+  /**
+   * The host sets how the item runs: a 5–120 second clock, a starting price
+   * (only before anyone has bid), and optionally sudden death.
+   */
+  const options = (req.body ?? {}) as { seconds?: unknown; startingPrice?: unknown; suddenDeath?: unknown };
+  let seconds: number = ITEM_TIMER.default;
+  if (options.seconds !== undefined) {
+    const value = Number(options.seconds);
+    if (!Number.isInteger(value) || value < 5 || value > 120) {
+      res.status(400).json({ error: 'invalid_timer', detail: 'A timer is 5 to 120 seconds.' });
+      return;
+    }
+    seconds = value;
+  }
+  if (options.startingPrice !== undefined) {
+    const price = Number(options.startingPrice);
+    if (!Number.isFinite(price) || price < 1 || price > 1_000_000) {
+      res.status(400).json({ error: 'invalid_price', detail: 'A starting price is between 1 and 1,000,000.' });
+      return;
+    }
+    if (auction.bidCount > 0) {
+      res.status(409).json({ error: 'price_locked', detail: 'The starting price cannot change after bidding has begun.' });
+      return;
+    }
+    auction.startingPrice = money.round2(price);
+  }
+  if (options.suddenDeath !== undefined) {
+    if (typeof options.suddenDeath !== 'boolean') {
+      res.status(400).json({ error: 'invalid_option', detail: 'suddenDeath must be true or false.' });
+      return;
+    }
+    auction.suddenDeath = options.suddenDeath;
+  }
+
   const firstStart = !stream.actualStartTime;
   stream.activeAuctionId = auction.id;
   stream.status = 'live';
@@ -1793,7 +1864,8 @@ app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
   streams.save(stream);
   auction.status = 'live';
   auction.startTime = store.iso();
-  auction.endTime = new Date(Date.now() + ITEM_TIMER.default * 1000).toISOString();
+  auction.endTime = new Date(Date.now() + seconds * 1000).toISOString();
+  auction.streamId = stream.id;
   auctions.save(auction);
   io.to(`stream:${stream.id}`).emit('stream:item', {
     streamId: stream.id,

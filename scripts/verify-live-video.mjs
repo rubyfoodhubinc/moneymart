@@ -243,6 +243,59 @@ const killed = await call(API, `/api/streams/${ivsShow}/end`, { method: 'POST', 
 check(killed.status === 200 && killed.json?.stream?.status === 'ended', 'staff can end any show (the kill switch)');
 check((await goLive(ivsShow)).status === 409, 'an ended show cannot go live again');
 
+/* ── 8. Running items in a live show ──────────────────────────────────── */
+section('8. The host runs items with their own timer, price and rules');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const runShow = await newShow('Auction night');
+await goLive(runShow);
+const lot = async (title, extra = {}) => (await call(API, '/api/auctions', { method: 'POST', headers: as(SELLER), body: { title, description: 'Test lot', categoryId: 'food', condition: 'new', auctionType: 'live_stream', startingPrice: 5, durationDays: 7, ...extra } })).json?.auction?.id;
+const lotA = await lot('Lot A');
+const lotB = await lot('Lot B');
+const lotC = await lot('Lot C', { buyItNowPrice: 50 });
+for (const id of [lotA, lotB, lotC]) await call(API, `/api/streams/${runShow}/items`, { method: 'POST', headers: as(SELLER), body: { auctionId: id } });
+const run = (id, body, who = SELLER) => call(API, `/api/streams/${runShow}/items/${id}/activate`, { method: 'POST', headers: as(who), body });
+const getLot = async (id) => (await call(API, `/api/auctions/${id}`)).json?.auction;
+const bid = async (id, who = VIEWER) => {
+  const detail = (await call(API, `/api/auctions/${id}`)).json;
+  return call(API, `/api/auctions/${id}/bids`, { method: 'POST', headers: as(who), body: { amount: detail.minimumBid } });
+};
+
+check((await run(lotA, { seconds: 3 })).status === 400, 'a timer under 5 seconds is refused');
+const ranA = await run(lotA, { seconds: 10, startingPrice: 7 });
+const a1 = await getLot(lotA);
+const left = (Date.parse(a1.endTime) - Date.now()) / 1000;
+check(ranA.status === 200 && a1.startingPrice === 7 && left > 8 && left <= 10.5, 'the item runs on the host’s 10-second clock and price', `${left.toFixed(1)}s, $${a1.startingPrice}`);
+check((await run(lotB, { seconds: 10 })).status === 409, 'a second item cannot start while one is on screen');
+await sleep(6500);
+const late = await bid(lotA);
+const a2 = await getLot(lotA);
+const lateLeft = (Date.parse(a2.endTime) - Date.now()) / 1000;
+check(late.status === 200 && lateLeft > 4 && lateLeft <= 5.5, 'a bid in the last seconds resets the clock to 5 seconds, not 30', `${lateLeft.toFixed(1)}s left`);
+await sleep(6500);
+const a3 = await getLot(lotA);
+const showAfter = (await call(API, `/api/streams/${runShow}`)).json?.stream;
+check(a3.status === 'sold' && a3.winnerId === VIEWER, 'the item sells to the highest bidder', `${a3.status} → ${a3.winnerId}`);
+check(!showAfter?.activeAuctionId, 'the show waits for the host instead of starting the next item');
+
+const ranB = await run(lotB, { seconds: 6, suddenDeath: true });
+const b1 = await getLot(lotB);
+await sleep(3500);
+await bid(lotB);
+const b2 = await getLot(lotB);
+check(ranB.status === 200 && b2.suddenDeath === true && b2.endTime === b1.endTime, 'sudden death: a late bid does not move the clock');
+await sleep(3500);
+
+/* ── 9. Buy It Now ─────────────────────────────────────────────────────── */
+section('9. Buy It Now buys the item');
+const buy = (id, who = VIEWER) => call(API, `/api/auctions/${id}/buy-now`, { method: 'POST', headers: as(who), body: {} });
+await run(lotC, { seconds: 60 });
+check((await buy(lotC, SELLER)).status === 409, 'a seller cannot buy their own item');
+const bought = await buy(lotC);
+const c1 = await getLot(lotC);
+check(bought.status === 200 && bought.json?.orderId && c1.status === 'sold' && c1.winnerId === VIEWER && c1.hammerPrice === 50, 'the buyer gets the item at the Buy It Now price, with an order', `${bought.status} ${c1.status} $${c1.hammerPrice}`);
+check((await buy(lotC)).status === 409, 'it cannot be bought twice');
+check((await buy(lotA)).status === 409, 'an item without a Buy It Now price cannot be bought outright');
+
 const colour = fail ? '\u001b[31m' : '\u001b[32m';
 console.log(`\n  ${colour}PASSED ${pass}   FAILED ${fail}\u001b[0m`);
 if (fail) failures.forEach((label) => console.log(`  - ${label}`));
