@@ -123,6 +123,16 @@ struct SellView: View {
             .padding(MM.Space.screen)
         }
         .scrollDismissesKeyboard(.interactively)
+        .toolbar {
+            // Decimal pads have no return key; give sellers a way out.
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+                .font(MM.Font.body(16, weight: .semibold))
+            }
+        }
         .onChange(of: picks) { _, items in Task { await ingest(items) } }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { image in if let value = ListingImage.encode(image) { photos.append(value) } }.ignoresSafeArea()

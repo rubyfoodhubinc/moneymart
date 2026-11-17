@@ -40,6 +40,17 @@ cd services/api && MM_PERSISTENCE=off MM_AUTH_DEV_CODES=true node dist/services/
 # then launch the app with MM_API_URL=http://127.0.0.1:4317
 ```
 
+### End-to-end buyer + seller journey (`testSignInBidAndSell`)
+
+Signs in with a development code, finds `auc_lebron` through search, places the minimum
+bid, then publishes a Buy It Now listing. It resets the local store, the rate limiter and
+the lot clock first, so it can be run repeatedly. Against any non-local gateway it skips.
+
+```bash
+TEST_RUNNER_MM_API_URL=http://127.0.0.1:4317 xcodebuild -project MoneyMart.xcodeproj -scheme MoneyMart \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro' test
+```
+
 ## Release checklist
 
 1. Set `DEVELOPMENT_TEAM` in `project.yml` and regenerate.

@@ -66,7 +66,7 @@ struct DiscoverView: View {
         }
         .buttonStyle(.plain)
         .navigationTitle("Discover")
-        .searchable(text: $query, prompt: Text("Search lots, sellers, brands"))
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: Text("Search lots, sellers, brands"))
         .onSubmit(of: .search) { Task { await search() } }
         .onChange(of: query) { _, value in if value.isEmpty { Task { await search() } } }
         .onChange(of: filter) { Task { await search() } }
