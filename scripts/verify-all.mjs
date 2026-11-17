@@ -66,6 +66,11 @@ const SUITES = [
     detail: 'full taxonomy, seller onboarding, host-only show control, one open show per listing',
   },
   {
+    name: 'Live video (IVS + Cloudflare)',
+    script: 'verify-live-video.mjs',
+    detail: 'signed IVS calls, Cloudflare inputs, admin switch, automatic fallback, teardown',
+  },
+  {
     name: 'Concurrency across auctions',
     script: 'verify-concurrency.mjs',
     detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',

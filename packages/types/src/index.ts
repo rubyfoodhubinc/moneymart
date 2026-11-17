@@ -211,6 +211,27 @@ export interface StreamPlayback {
 
 export type ShowFormat = 'auction' | 'buy_now' | 'mixed';
 
+export type LiveVideoProviderId = 'ivs' | 'cloudflare';
+
+export interface StreamVideoRoom {
+  provider: LiveVideoProviderId;
+  roomId: string;
+  /** Cloudflare WHIP ingest URL — a broadcast credential. */
+  whipUrl?: string;
+  whepUrl?: string;
+  createdAt: ISODate;
+}
+
+/** Platform-wide live video choice, switched by staff from the admin dashboard. */
+export interface LiveVideoSettings {
+  primary: LiveVideoProviderId;
+  /** Try the other provider when the primary cannot open a room. */
+  autoFallback: boolean;
+  updatedAt?: ISODate;
+  updatedBy?: string;
+  lastFailover?: { at: ISODate; from: LiveVideoProviderId; to: LiveVideoProviderId; reason: string; showId: string };
+}
+
 export interface ShowShipping {
   /** Buyers may collect in person instead of paying for shipping. */
   freePickup: boolean;
@@ -242,6 +263,8 @@ export interface Stream {
   shipping?: ShowShipping;
   /** Host-private: accounts to notify when the show goes live. */
   reminderUserIds?: string[];
+  /** Host-private: the live video room this show broadcasts through. */
+  video?: StreamVideoRoom;
   scheduledStartTime: ISODate;
   actualStartTime?: ISODate;
   endTime?: ISODate;
@@ -438,6 +461,8 @@ export interface ServerToClientEvents {
   'stream:viewers': (payload: { streamId: string; viewerCount: number }) => void;
   'stream:item': (payload: { streamId: string; auctionId?: string; nextInQueue: number }) => void;
   'stream:ended': (payload: { streamId: string; totalGMV: number }) => void;
+  /** The host started broadcasting; viewers waiting on the show should join the video. */
+  'stream:started': (payload: { streamId: string; liveVideoProvider: LiveVideoProviderId }) => void;
   'chat:message': (payload: ChatMessage) => void;
   'chat:pin': (payload: { streamId: string; message: ChatMessage | null }) => void;
   'notification': (payload: AppNotification) => void;

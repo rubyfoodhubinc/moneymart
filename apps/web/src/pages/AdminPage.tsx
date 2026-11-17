@@ -33,6 +33,7 @@ import {
   UsersIcon,
 } from '@/components/icons';
 import { api } from '@/lib/api';
+import { LiveVideoCard } from '@/components/LiveVideoCard';
 import { useAuctions, useStreams } from '@/lib/hooks';
 import { formatMoney, formatViewers, pct } from '@/lib/format';
 import { MONETIZATION } from '@moneymart/tokens';
@@ -208,6 +209,8 @@ export default function AdminPage() {
               <p className="text-[12.5px] text-white/50">No live streams right now.</p>
             )}
           </Card>
+
+          <LiveVideoCard />
 
           {/* Financial reporting */}
           <Card className="p-5">

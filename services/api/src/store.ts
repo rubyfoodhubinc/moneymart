@@ -83,8 +83,19 @@ export const db = {
   oauthIdentities: new Map<string, string>(),
   /** Seller requests for categories the taxonomy does not cover yet. */
   categoryRequests: new Map<string, CategoryRequest>(),
+  /** Platform settings staff change at runtime (e.g. the live video provider). */
+  settings: new Map<string, unknown>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
+};
+
+/* ── Platform settings ─────────────────────────────────── */
+export const settings = {
+  get: <T>(key: string): T | undefined => db.settings.get(key) as T | undefined,
+  set: <T>(key: string, value: T) => {
+    db.settings.set(key, value);
+    return value;
+  },
 };
 
 /* ── Category requests ─────────────────────────────────── */
@@ -395,6 +406,7 @@ const COLLECTIONS = [
    */
   'oauthIdentities',
   'categoryRequests',
+  'settings',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

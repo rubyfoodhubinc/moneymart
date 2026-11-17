@@ -203,6 +203,17 @@ export const POLICIES = {
     message: 'Too many listings created. Try again later.',
   } satisfies RateLimitPolicy,
 
+  /**
+   * Joining live video. Each call may mint a provider token (a billable API
+   * call on Amazon IVS), so a client reconnect loop cannot run up costs.
+   */
+  liveVideo: {
+    name: 'live-video',
+    windowMs: 60 * 1000,
+    max: envMax('MM_LIVE_VIDEO_MAX', 30),
+    message: 'Too many attempts to join the video. Wait a moment.',
+  } satisfies RateLimitPolicy,
+
   /** Chat over HTTP, if a client ever posts it that way. */
   chat: {
     name: 'chat',

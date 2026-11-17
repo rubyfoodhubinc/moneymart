@@ -204,7 +204,23 @@ function qs(params: Record<string, string | number | undefined | null>): string 
   return text ? `?${text}` : '';
 }
 
+export type LiveVideoProviderId = 'ivs' | 'cloudflare';
+export interface LiveVideoStatus {
+  primary: LiveVideoProviderId;
+  autoFallback: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedByName?: string;
+  lastFailover?: { at: string; from: LiveVideoProviderId; to: LiveVideoProviderId; reason: string; showId: string };
+  providers: { id: LiveVideoProviderId; label: string; configured: boolean; role: 'primary' | 'backup' }[];
+  liveShows: { id: string; title: string; provider: LiveVideoProviderId }[];
+}
+
 export const api = {
+  /** Staff: which live video service new shows use, and the automatic backup. */
+  liveVideoStatus: () => request<LiveVideoStatus>('/api/admin/live-video'),
+  setLiveVideo: (body: { primary?: LiveVideoProviderId; autoFallback?: boolean }) =>
+    request<LiveVideoStatus>('/api/admin/live-video', { method: 'PUT', body: JSON.stringify(body) }),
   health: () => request<{ ok: boolean; liveStreams: number; liveAuctions: number; uptimeSeconds: number }>('/api/health'),
   config: () =>
     request<{

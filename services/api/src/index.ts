@@ -17,6 +17,7 @@ import { Server as SocketServer } from 'socket.io';
 import type {
   AuctionWithRelations,
   ClientToServerEvents,
+  LiveVideoSettings,
   PostalAddress,
   SellerProfile,
   Stream,
@@ -42,10 +43,22 @@ import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
 import { authService, deliveryConfigured } from './engine/auth.js';
 import { oauthService } from './engine/oauth.js';
 import { resolveStreamPlayback } from './engine/playback.js';
+import {
+  LIVE_VIDEO_PROVIDERS,
+  LiveVideoError,
+  PROVIDER_LABELS,
+  closeRoom,
+  createRoomWithFallback,
+  hostCredentials,
+  isConfigured as liveVideoConfigured,
+  viewerCredentials,
+  type LiveVideoProviderId,
+} from './engine/liveVideo.js';
 import { validateImage, validateImages, MAX_IMAGES } from './lib/images.js';
 import {
   auctions,
   categoryRequests,
+  settings,
   chat,
   items,
   notifications,
@@ -393,9 +406,12 @@ function expandStream(streamId: string) {
   const stream = streams.get(streamId);
   if (!stream) return null;
   // Who asked for a reminder and which words are muted are the host's business only.
-  const { reminderUserIds, mutedWords: _muted, ...visible } = stream;
+  const { reminderUserIds, mutedWords: _muted, video, ...visible } = stream;
+  const live = stream.status === 'live' && video;
   return {
     ...visible,
+    /** Which live video service carries this show; clients pick the matching player. */
+    liveVideoProvider: video?.provider,
     reminderCount: reminderUserIds?.length ?? 0,
     shareUrl: showShareUrl(stream.id),
     moderators: (stream.moderatorIds ?? []).map((id) => publicProfile(id)),
@@ -407,13 +423,16 @@ function expandStream(streamId: string) {
      * and whether it is a real broadcast. An unresolvable stored URL becomes a
      * labelled demo rather than a dead player.
      */
-    playback: resolveStreamPlayback({
-      streamId: stream.id,
-      status: stream.status,
-      storedUrl: stream.hlsUrl,
-      fallbackUrl: process.env.MM_DEMO_HLS_URL,
-      mediaBaseUrl: mediaBaseUrl(),
-    }),
+    // A real broadcast is joined through /watch, not an HLS URL.
+    playback: live
+      ? { mode: 'live' as const, label: 'Live now', updatedAt: store.iso() }
+      : resolveStreamPlayback({
+          streamId: stream.id,
+          status: stream.status,
+          storedUrl: stream.hlsUrl,
+          fallbackUrl: process.env.MM_DEMO_HLS_URL,
+          mediaBaseUrl: mediaBaseUrl(),
+        }),
   };
 }
 
@@ -1207,6 +1226,174 @@ function requireHost(req: Request, res: Response, streamId: string): Stream | nu
   return stream;
 }
 
+/* ── Live video: provider choice, go live, watch ─────────────────────── */
+
+function isStaff(userId: string): boolean {
+  return users.get(userId)?.role === 'admin';
+}
+
+const LIVE_VIDEO_KEY = 'liveVideo';
+
+/** Current platform choice. Defaults to IVS with Cloudflare as automatic backup. */
+function liveVideoSettings(): LiveVideoSettings {
+  const stored = settings.get<LiveVideoSettings>(LIVE_VIDEO_KEY);
+  const envPrimary = process.env.MM_LIVE_VIDEO_PRIMARY === 'cloudflare' ? 'cloudflare' : 'ivs';
+  return { primary: envPrimary, autoFallback: true, ...(stored ?? {}) };
+}
+
+function liveVideoStatus() {
+  const current = liveVideoSettings();
+  return {
+    ...current,
+    updatedByName: current.updatedBy ? users.get(current.updatedBy)?.displayName : undefined,
+    providers: LIVE_VIDEO_PROVIDERS.map((id) => ({
+      id,
+      label: PROVIDER_LABELS[id],
+      configured: liveVideoConfigured(id),
+      role: id === current.primary ? 'primary' : 'backup',
+    })),
+    liveShows: streams.live().filter((s) => s.video).map((s) => ({ id: s.id, title: s.title, provider: s.video!.provider })),
+  };
+}
+
+/** Staff only. 404 for everyone else, so the console's existence is not confirmed. */
+function requireStaff(req: Request, res: Response): string | null {
+  const userId = actorId(req);
+  if (!userId || !isStaff(userId)) {
+    res.status(404).json({ error: 'not_found' });
+    return null;
+  }
+  return userId;
+}
+
+app.get('/api/admin/live-video', (req, res) => {
+  if (!requireStaff(req, res)) return;
+  res.json(liveVideoStatus());
+});
+
+/**
+ * Switch the live video provider. Affects shows that go live from now on; a show
+ * already broadcasting keeps its provider (moving it would cut viewers off).
+ */
+app.put('/api/admin/live-video', (req, res) => {
+  const staffId = requireStaff(req, res);
+  if (!staffId) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const current = liveVideoSettings();
+  let primary = current.primary;
+  if (body.primary !== undefined) {
+    if (!LIVE_VIDEO_PROVIDERS.includes(body.primary as LiveVideoProviderId)) {
+      res.status(400).json({ error: 'unknown_provider', detail: 'Choose ivs or cloudflare.' });
+      return;
+    }
+    primary = body.primary as LiveVideoProviderId;
+    if (!liveVideoConfigured(primary)) {
+      res.status(409).json({ error: 'provider_not_configured', detail: `${PROVIDER_LABELS[primary]} has no credentials on the server yet.` });
+      return;
+    }
+  }
+  let autoFallback = current.autoFallback;
+  if (body.autoFallback !== undefined) {
+    if (typeof body.autoFallback !== 'boolean') {
+      res.status(400).json({ error: 'invalid_setting', detail: 'autoFallback must be true or false.' });
+      return;
+    }
+    autoFallback = body.autoFallback;
+  }
+  settings.set<LiveVideoSettings>(LIVE_VIDEO_KEY, { ...current, primary, autoFallback, updatedAt: store.iso(), updatedBy: staffId });
+  console.log(`[live-video] ${staffId} set primary=${primary} autoFallback=${autoFallback}`);
+  res.json(liveVideoStatus());
+});
+
+/** One go-live at a time per show, so a double tap cannot open two paid rooms. */
+const goLiveInFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * Start broadcasting. Opens the show's room on the platform's provider (falling
+ * back automatically when allowed) and returns the host's broadcast credentials.
+ * Calling again re-issues credentials for the same room. `useBackup` moves the
+ * show to the other provider — the host's escape hatch when their stream will not
+ * connect.
+ */
+app.post('/api/streams/:id/go-live', rateLimit(POLICIES.liveVideo), async (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.status === 'ended') {
+    res.status(409).json({ error: 'show_ended', detail: 'This show has ended. Schedule a new one.' });
+    return;
+  }
+  const previous = goLiveInFlight.get(stream.id);
+  if (previous) await previous.catch(() => undefined);
+
+  const useBackup = (req.body ?? {}).useBackup === true;
+  const work = (async () => {
+    let failedOver: { from: LiveVideoProviderId; reason: string } | undefined;
+    if (!stream.video || useBackup) {
+      const config = liveVideoSettings();
+      if (useBackup) {
+        const current = stream.video?.provider ?? config.primary;
+        const backup = LIVE_VIDEO_PROVIDERS.find((p) => p !== current)!;
+        if (!liveVideoConfigured(backup)) {
+          throw new LiveVideoError(backup, 'not_configured', `${PROVIDER_LABELS[backup]} is not configured, so there is no backup to switch to.`);
+        }
+        const opened = await createRoomWithFallback(backup, false, stream.id, stream.title);
+        if (stream.video) void closeRoom(stream.video);
+        stream.video = { ...opened.room };
+        failedOver = { from: current, reason: 'host_requested' };
+      } else {
+        const opened = await createRoomWithFallback(config.primary, config.autoFallback, stream.id, stream.title);
+        stream.video = { ...opened.room };
+        failedOver = opened.failedOver;
+      }
+      if (failedOver) {
+        settings.set<LiveVideoSettings>(LIVE_VIDEO_KEY, {
+          ...liveVideoSettings(),
+          lastFailover: { at: store.iso(), from: failedOver.from, to: stream.video.provider, reason: failedOver.reason, showId: stream.id },
+        });
+        console.warn(`[live-video] show ${stream.id} moved ${failedOver.from} → ${stream.video.provider} (${failedOver.reason})`);
+      }
+    }
+    const credentials = await hostCredentials(stream.video, stream.creatorId);
+    const firstStart = !stream.actualStartTime;
+    stream.status = 'live';
+    stream.actualStartTime = stream.actualStartTime ?? store.iso();
+    streams.save(stream);
+    if (firstStart) notifyShowLive(stream);
+    io.to(`stream:${stream.id}`).emit('stream:started', { streamId: stream.id, liveVideoProvider: stream.video.provider });
+    return { credentials, failedOver };
+  })();
+  goLiveInFlight.set(stream.id, work);
+  try {
+    const { credentials, failedOver } = await work;
+    res.json({ stream: hostView(stream.id), broadcast: credentials, failedOver });
+  } catch (error) {
+    const failure = error instanceof LiveVideoError ? error : new LiveVideoError('ivs', 'error', 'Live video failed');
+    res.status(503).json({ error: 'live_video_unavailable', provider: failure.provider, reason: failure.reason, detail: failure.message });
+  } finally {
+    if (goLiveInFlight.get(stream.id) === work) goLiveInFlight.delete(stream.id);
+  }
+});
+
+/** Join a live show's video. Open to anyone who can open the show, signed in or not. */
+app.get('/api/streams/:id/watch', rateLimit(POLICIES.liveVideo), async (req, res) => {
+  const stream = streams.get(req.params.id);
+  if (!stream) {
+    res.status(404).json({ error: 'stream_not_found' });
+    return;
+  }
+  if (stream.status !== 'live' || !stream.video) {
+    res.status(409).json({ error: 'not_live', detail: 'This show is not broadcasting right now.' });
+    return;
+  }
+  try {
+    const viewer = actorId(req);
+    res.json({ viewer: await viewerCredentials(stream.video, viewer && users.get(viewer) ? viewer : null) });
+  } catch (error) {
+    const failure = error instanceof LiveVideoError ? error : new LiveVideoError(stream.video.provider, 'error', 'Live video failed');
+    res.status(503).json({ error: 'live_video_unavailable', provider: failure.provider, reason: failure.reason, detail: failure.message });
+  }
+});
+
 const SHOW_FORMATS = ['auction', 'buy_now', 'mixed'] as const;
 const SHOW_TITLE_MAX = 150;
 
@@ -1635,8 +1822,17 @@ function notifyShowLive(stream: Stream): void {
 }
 
 app.post('/api/streams/:id/end', (req, res) => {
-  const stream = requireHost(req, res, req.params.id);
-  if (!stream) return;
+  // Staff may end any show (the admin kill switch); everyone else only their own.
+  const staff = isStaff(actorId(req));
+  const stream = staff ? streams.get(req.params.id) : requireHost(req, res, req.params.id);
+  if (!stream) {
+    if (staff) res.status(404).json({ error: 'stream_not_found' });
+    return;
+  }
+  if (stream.video) {
+    void closeRoom(stream.video);
+    stream.video = undefined;
+  }
   stream.status = 'ended';
   stream.endTime = store.iso();
   stream.activeAuctionId = undefined;
