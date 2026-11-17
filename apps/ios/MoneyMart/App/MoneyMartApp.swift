@@ -6,6 +6,7 @@ struct MoneyMartApp: App {
     @State private var session = SessionStore()
     @State private var watchlist = WatchlistStore()
     @State private var router = Router()
+    @State private var ore = OreStore()
     @AppStorage("mm.onboarded") private var onboarded = false
 
     init() {
@@ -23,10 +24,12 @@ struct MoneyMartApp: App {
                 .environment(session)
                 .environment(watchlist)
                 .environment(router)
+                .environment(ore)
                 .environment(Realtime.shared)
                 .preferredColorScheme(.dark)
                 .tint(MM.Color.gold)
                 .task { await session.bootstrap() }
+                .task { await ore.refreshStatus() }
                 .onOpenURL { router.open($0) }
         }
     }
@@ -72,6 +75,7 @@ final class Router {
     var livePath: [Route] = []
     var profilePath: [Route] = []
     var showSignIn = false
+    var showOre = false
 
     func open(_ url: URL) {
         guard url.scheme == "moneymart" else { return }
@@ -108,6 +112,9 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.35), value: session.status)
         .sheet(isPresented: $router.showSignIn) {
             AuthView().presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $router.showOre) {
+            OreChatView().presentationDragIndicator(.visible)
         }
     }
 }

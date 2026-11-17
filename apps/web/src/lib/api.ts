@@ -241,6 +241,11 @@ export interface AdminProviders {
   prices: Record<string, [number, number]>;
   cost30d: { usd: number; calls: number; unpriced: string[] };
 }
+export interface BoardLine { id: string; speaker: string; name: string; text: string; at: string }
+export interface BoardMeeting {
+  id: string; kind: 'board' | 'room'; topic: string; seats: string[]; lines: BoardLine[]; status: 'open' | 'closed';
+  speaking: string | null; createdAt: string; closedAt?: string; minutesPostId?: string; lineCount?: number;
+}
 export interface AuditEntry { id: string; at: string; actor: string; action: string; target: string; detail: Record<string, unknown> }
 
 export const api = {
@@ -258,6 +263,13 @@ export const api = {
     request<{ reply: PresChatLine; approvalsWaiting: number }>('/api/admin/president/chat', { method: 'POST', body: JSON.stringify({ text, thread }) }),
   decidePresident: (id: string, decision: 'approve' | 'deny') =>
     request<{ ok: boolean; post: PresPost }>(`/api/admin/president/decide/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  boardMeetings: () => request<{ meetings: BoardMeeting[] }>('/api/admin/boardroom'),
+  boardMeeting: (id: string) => request<{ meeting: BoardMeeting }>(`/api/admin/boardroom/${id}`),
+  openBoardMeeting: (topic: string, staffIds?: string[]) =>
+    request<{ meeting: BoardMeeting }>('/api/admin/boardroom', { method: 'POST', body: JSON.stringify({ topic, staffIds }) }),
+  sayInBoardroom: (id: string, text: string) =>
+    request<{ meeting: BoardMeeting }>(`/api/admin/boardroom/${id}/say`, { method: 'POST', body: JSON.stringify({ text }) }),
+  closeBoardMeeting: (id: string) => request<{ meeting: BoardMeeting }>(`/api/admin/boardroom/${id}/close`, { method: 'POST', body: '{}' }),
   presidentBriefing: () => request<{ post: PresPost; emailed: boolean }>('/api/admin/president/briefing', { method: 'POST', body: '{}' }),
 
   /** Staff: which live video service new shows use, and the automatic backup. */

@@ -77,8 +77,14 @@ struct ProfileView: View {
         .accessibilityElement(children: .combine)
     }
 
+    @Environment(OreStore.self) private var ore
+
     private var menu: some View {
         VStack(spacing: 0) {
+            if ore.visible {
+                Button { router.showOre = true } label: { row("sparkles", "Ask Ore") }
+                    .accessibilityIdentifier("profile-ore")
+            }
             NavigationLink(value: Router.Route.orders) { row("shippingbox.fill", "Orders") }
             NavigationLink(value: Router.Route.wallet) { row("creditcard.fill", "Wallet & payouts") }
             NavigationLink(value: Router.Route.watchlist) { row("heart.fill", "Watchlist") }

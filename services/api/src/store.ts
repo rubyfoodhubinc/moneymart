@@ -93,6 +93,8 @@ export const db = {
   presStaff: new Map<string, PresStaff>(),
   presPosts: new Map<string, PresPost>(),
   presChat: new Map<string, PresChatLine>(),
+  /** Boardroom meetings and one-to-one rooms with the executive team. */
+  boardMeetings: new Map<string, BoardMeeting>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
 };
@@ -198,6 +200,39 @@ export const presChat = {
     db.presChat.set(l.id, l);
     if (db.presChat.size > 10_000) db.presChat.delete(db.presChat.keys().next().value!);
     return l;
+  },
+};
+
+/* ── Boardroom ─────────────────────────────────────────── */
+export interface BoardLine {
+  id: string;
+  /** 'owner', 'president', or a staff id. */
+  speaker: string;
+  name: string;
+  text: string;
+  at: string;
+}
+export interface BoardMeeting {
+  id: string;
+  kind: 'board' | 'room';
+  topic: string;
+  seats: string[];
+  lines: BoardLine[];
+  status: 'open' | 'closed';
+  /** Who is talking right now (a staff id or 'president'), while a round runs. */
+  speaking: string | null;
+  createdAt: string;
+  createdBy: string;
+  closedAt?: string;
+  minutesPostId?: string;
+}
+export const boardMeetings = {
+  all: () => [...db.boardMeetings.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  get: (id: string) => db.boardMeetings.get(id),
+  save: (m: BoardMeeting) => {
+    db.boardMeetings.set(m.id, m);
+    if (db.boardMeetings.size > 500) db.boardMeetings.delete(db.boardMeetings.keys().next().value!);
+    return m;
   },
 };
 
@@ -524,6 +559,7 @@ const COLLECTIONS = [
   'presStaff',
   'presPosts',
   'presChat',
+  'boardMeetings',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

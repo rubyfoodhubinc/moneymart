@@ -1,7 +1,7 @@
 # 7. Conformance tests
 
-An app conforms to v1.0 when an automated test, run against a scripted stand-in for the model API (no real key), passes every check below.
-Reference: `scripts/verify-president.mjs` (34 checks).
+An app conforms to a version when an automated test, run against a scripted stand-in for the model API (no real key), passes every check below.
+Reference: `scripts/verify-president.mjs` (47 checks: 34 for v1.0, 13 for the v1.1 boardroom).
 
 ## 7.1 Access
 
@@ -60,6 +60,22 @@ Reference: `scripts/verify-president.mjs` (34 checks).
 - [ ] Providers show key presence, never the key.
 - [ ] The office uses the President key; the local AI uses the general key.
 
-## 7.9 Writing the stand-in
+## 7.9 Boardroom (v1.1)
+
+- [ ] The owner moves seats between AI providers.
+- [ ] Members cannot open the boardroom.
+- [ ] A board meeting opens and the first head starts speaking.
+- [ ] Each of the five heads speaks, then the President sums up.
+- [ ] Every head speaks in their own voice.
+- [ ] The owner interjects; the table answers one round at a time (409 while busy).
+- [ ] The table answers the owner with another round.
+- [ ] Closing writes the minutes to Reports.
+- [ ] Proposals from the meeting wait in approvals.
+- [ ] A closed meeting takes no more turns.
+- [ ] A private room with one head.
+- [ ] Past meetings are listed.
+- [ ] Meetings are in the audit log.
+
+## 7.10 Writing the stand-in
 
 The stand-in answers by who is speaking (the start of the system prompt) and what the owner asked (the text after `OWNER:`), returning Messages-API JSON with `content` blocks and `usage`. It records the key on every request so key separation can be checked.

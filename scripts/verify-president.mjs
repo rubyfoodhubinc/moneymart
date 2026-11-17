@@ -58,6 +58,15 @@ function respond(body) {
   const system = String(body.system ?? '');
   const text = lastText(body.messages);
   const first = typeof body.messages[body.messages.length - 1].content === 'string';
+  if (/round table|private meeting with the Owner/.test(system)) {
+    const name = system.match(/^You are ([^,]+),/)?.[1];
+    return say(`${name} here: on this topic my department recommends one concrete step.`);
+  }
+  if (system.includes('chairing MoneyMart')) return say('Summary: the team agrees on the first step; you decide the budget.');
+  if (system.startsWith('You are President') && first && text.includes('Close this')) {
+    return tool('propose_member_message', { subject: 'Board: new seller week', body: 'Next week is new seller week on MoneyMart — schedule your first show and we will feature it on Home. Thanks for selling with us.', audience: 'sellers', why: 'Agreed at the board meeting' });
+  }
+  if (system.startsWith('You are President') && !first && text.includes('a message to sellers')) return say('Minutes: the team backs new seller week.\n1. Message to sellers (waiting for your approval).');
   if (system.startsWith('You are Grace Mensah')) {
     return say(JSON.stringify({ kind: 'draft_member_message', title: 'Fees are lower this week', body: 'Sellers keep more of every sale this week. List an item or schedule a show to try it — nothing to switch on. Thanks for selling on MoneyMart.', remember: 'Owner likes short member messages' }));
   }
@@ -251,6 +260,47 @@ check(prov.json?.cost30d?.calls > 0 && prov.json.cost30d.usd > 0, 'AI calls are 
 check(prov.json?.ai?.find((p) => p.id === 'anthropic')?.configured === true && !JSON.stringify(prov.json).includes('test-claude-key') && !JSON.stringify(prov.json).includes('test-member-key'), 'providers show key presence, never the key');
 const oreCalls = seen.filter((s) => String(s.body.system).startsWith('You are Ore'));
 check(oreCalls.length > 0 && oreCalls.every((s) => s.key === 'test-member-key') && seen.filter((s) => !String(s.body.system).startsWith('You are Ore')).every((s) => s.key === 'test-claude-key'), 'the office uses the President key; members’ Ore uses the general key');
+
+
+/* ── 9 ── */
+section('9. Boardroom: round table chaired by the President');
+const wait = async (id, ms = 20_000) => {
+  const until = Date.now() + ms;
+  for (;;) {
+    const m = (await call(`/api/admin/boardroom/${id}`, { headers: as(OWNER) })).json?.meeting;
+    if (!m?.speaking || Date.now() > until) return m;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+};
+const allClaude = Object.fromEntries(['operations', 'marketing', 'sales'].map((k) => [k, { provider: 'anthropic', model: 'claude-sonnet-5-5' }]));
+check((await call('/api/admin/settings', { method: 'PUT', headers: as(OWNER), body: { changes: [{ key: 'ai.seats', value: allClaude }] } })).status === 200, 'the owner moves seats between AI providers');
+check((await call('/api/admin/boardroom', { method: 'POST', headers: as(MEMBER), body: { topic: 'x' } })).status === 404, 'members cannot open the boardroom');
+const opened = await call('/api/admin/boardroom', { method: 'POST', headers: as(OWNER), body: { topic: 'How do we double sellers next quarter?' } });
+check(opened.status === 201 && opened.json.meeting.kind === 'board' && opened.json.meeting.speaking, 'a board meeting opens and the first head starts speaking');
+const mid1 = opened.json.meeting.id;
+let meeting = await wait(mid1);
+const names = meeting.lines.map((l) => l.name);
+check(meeting.lines.length === 7 && names[0] === 'Owner' && names.at(-1) === 'President Ore', 'each of the five heads speaks, then the President sums up', names.join(' → '));
+check(meeting.lines.slice(1, 6).every((l) => l.text.startsWith(`${l.name} here`)), 'every head speaks in their own voice');
+const said = await call(`/api/admin/boardroom/${mid1}/say`, { method: 'POST', headers: as(OWNER), body: { text: 'Focus on food and collectibles.' } });
+const busy = await call(`/api/admin/boardroom/${mid1}/say`, { method: 'POST', headers: as(OWNER), body: { text: 'again' } });
+check(said.status === 200 && busy.status === 409, 'the owner interjects; the table answers one round at a time');
+meeting = await wait(mid1);
+check(meeting.lines.length === 14, 'the table answers the owner with another round', `${meeting.lines.length} lines`);
+const closed = await call(`/api/admin/boardroom/${mid1}/close`, { method: 'POST', headers: as(OWNER), body: {} });
+const afterClose = await office();
+const minutes = afterClose.reports.find((r) => r.meta?.folder === 'board');
+check(closed.status === 200 && closed.json.meeting.status === 'closed' && minutes && /Minutes/.test(minutes.body), 'closing writes the minutes to Reports');
+check(afterClose.approvals.some((p) => p.title === 'Board: new seller week' && p.status === 'pending'), 'proposals from the meeting wait in approvals');
+check((await call(`/api/admin/boardroom/${mid1}/say`, { method: 'POST', headers: as(OWNER), body: { text: 'more' } })).status === 409, 'a closed meeting takes no more turns');
+const graceId = afterClose.staff.find((x) => x.department === 'Finance').id;
+const room = await call('/api/admin/boardroom', { method: 'POST', headers: as(OWNER), body: { topic: 'Where is money leaking?', staffIds: [graceId] } });
+const roomDone = await wait(room.json?.meeting?.id);
+check(room.json?.meeting?.kind === 'room' && roomDone.lines.length === 2 && roomDone.lines[1].name === 'Grace Mensah', 'a private room with one head');
+const list = await call('/api/admin/boardroom', { headers: as(OWNER) });
+check(list.json?.meetings?.length === 2, 'past meetings are listed');
+const log2 = new Set(((await call('/api/admin/audit', { headers: as(OWNER) })).json?.entries ?? []).map((e) => e.action));
+check(log2.has('boardroom_open') && log2.has('boardroom_close'), 'meetings are in the audit log');
 
 const colour = fail ? '\u001b[31m' : '\u001b[32m';
 console.log(`\n  ${colour}PASSED ${pass}   FAILED ${fail}\u001b[0m`);

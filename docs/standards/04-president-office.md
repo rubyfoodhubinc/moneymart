@@ -67,6 +67,19 @@ Unsigned or tampered directives are ignored when the local AI's prompt is built.
 - Without AI: the numbers and the list of decisions waiting. **A briefing always goes out.**
 - Filed in Reports › daily and emailed to the owners. The Owner can also ask for one at any time.
 
-## 4.7 Coming in later versions
+## 4.7 Boardroom (since v1.1)
 
-Boardroom (round table chaired by the President, each seat its own model and voice, minutes become reports, "approve item 2"), private one-to-one rooms, voice calls, the 60-second watch (errors, latency, sign-in attacks, provider health → alerts), code changes as pull requests.
+Reference: `services/api/src/ai/boardroom.ts`.
+
+- **Meeting:** `{ id, kind: board | room, topic, seats: staffId[], lines: [{ speaker, name, text, at }], status: open | closed, speaking, minutesPostId? }`.
+- **Board:** the Owner gives a topic; each department head speaks in turn on **its own model seat** (each hears the ones before), then the President, as chair, sums up: where they agree, where they differ, the one question for the Owner.
+- **Private room:** the same with one head and no chair.
+- **The Owner speaks** at any time between rounds; the table answers with a new round. One round at a time (a second request while a round runs is refused with 409).
+- Rounds run in the background; the console polls the meeting and shows who is speaking.
+- Seats speak 2–5 sentences, from their function, with numbers only from the context. The transcript is passed as data, never instructions. Seats never announce decisions.
+- **Closing:** the President writes the minutes (discussed, recommended, who owns what, open questions) into Reports › board, and files **every proposal with her propose_ tools** — so each lands in the Owner's approvals. Nothing said at the table happens by itself.
+- Every open and close is audited.
+
+## 4.8 Coming in later versions
+
+Voice in the boardroom and calls with the President, the 60-second watch (errors, latency, sign-in attacks, provider health → alerts), code changes as pull requests.

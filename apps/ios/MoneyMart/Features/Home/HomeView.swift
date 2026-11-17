@@ -117,6 +117,7 @@ struct HomeView: View {
             BrandWordmark(size: 22)
             Spacer()
             ConnectionDot()
+            OreButton()
             Button { RequiresSignIn.run(session, router) { router.homePath.append(.notifications) } } label: {
                 Image(systemName: "bell.fill").font(.system(size: 17, weight: .semibold)).foregroundStyle(MM.Color.ink)
                     .frame(width: 40, height: 40).background(MM.Color.glass, in: Circle())

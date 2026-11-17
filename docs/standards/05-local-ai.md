@@ -52,3 +52,4 @@ Only entries whose signature verifies are included.
 
 - iOS/Android/web show her as a chat with the app's own look: a name, a short greeting, quick suggestions, and a "sent to the President" note when she reports something.
 - The app checks `GET /api/ore/status` first and hides her when `enabled` is false or `available` is false.
+- MoneyMart iOS (reference): a gold sparkles button in the Home header and an "Ask Ore" row in Profile open a chat sheet. Signed-out members are sent to sign in first. A floating button is avoided because it would cover bidding controls in live shows. The chat keeps the last 10 turns in memory only and shows "Sent to President …" under a reply that reported something.

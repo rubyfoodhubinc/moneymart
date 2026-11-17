@@ -236,6 +236,37 @@ final class MoneyMartUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rows.count, before + 3, "the series is scheduled in one step")
     }
 
+    /// Ore, the member's assistant: opens from Home, answers, and reports a request up to President Ore.
+    /// Needs a local API whose Claude base points at a stand-in (see scripts/verify-president.mjs).
+    func testOreAnswersAndReportsUp() async throws {
+        try await prepareLocalGateway()
+        app.buttons["welcome-skip"].tap()
+        try signIn("qa.ore@moneymart.test")
+
+        app.tabBars.buttons["Home"].tap()
+        let open = app.buttons["ore-button"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10), "Ore shows when the server has her switched on")
+        open.tap()
+
+        let suggestion = app.buttons["ore-suggestion-0"]
+        XCTAssertTrue(suggestion.waitForExistence(timeout: 5), "a new chat offers suggestions")
+        suggestion.tap()
+        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'bid'")).matching(NSPredicate(format: "label CONTAINS 'Bidding is simple'")).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: 30), "Ore answers the member")
+
+        let input = app.textFields["ore-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("Please add dark mode")
+        app.buttons["ore-send"].tap()
+        let reported = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Sent to President'")).firstMatch
+        XCTAssertTrue(reported.waitForExistence(timeout: 30), "the member sees the request went to the President")
+
+        app.buttons["ore-done"].tap()
+        app.tabBars.buttons["Profile"].tap()
+        XCTAssertTrue(app.buttons["profile-ore"].waitForExistence(timeout: 5), "Ore is also in Profile")
+    }
+
     private func signIn(_ identifier: String) throws {
         app.tabBars.buttons["Profile"].tap()
         app.buttons["profile-signin"].tap()

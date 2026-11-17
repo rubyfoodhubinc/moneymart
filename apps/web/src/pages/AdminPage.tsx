@@ -34,6 +34,7 @@ import {
 } from '@/components/icons';
 import { api } from '@/lib/api';
 import { LiveVideoCard } from '@/components/LiveVideoCard';
+import { BoardroomPanel } from '@/components/Boardroom';
 import { AuditPanel, OverviewStrip, PresidentPanel, ProvidersPanel, SettingsPanel } from '@/components/OwnerConsole';
 import { useAuctions, useStreams } from '@/lib/hooks';
 import { formatMoney, formatViewers, pct } from '@/lib/format';
@@ -49,10 +50,11 @@ const FLAGS = [
   { key: 'tv_apps', label: 'TV & IPTV apps', on: false, hint: 'Phase 3 — Q3 2027' },
 ];
 
-type ConsoleTab = 'overview' | 'president' | 'settings' | 'providers' | 'audit';
+type ConsoleTab = 'overview' | 'president' | 'boardroom' | 'settings' | 'providers' | 'audit';
 const CONSOLE_TABS: { id: ConsoleTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'president', label: 'President' },
+  { id: 'boardroom', label: 'Boardroom' },
   { id: 'settings', label: 'Settings' },
   { id: 'providers', label: 'Providers' },
   { id: 'audit', label: 'Audit' },
@@ -71,7 +73,7 @@ export default function AdminPage() {
   const [killTarget, setKillTarget] = useState<string | null>(null);
   const me = useQuery({ queryKey: ['admin', 'me'], queryFn: api.adminMe, retry: false, enabled: Boolean(user) });
   const [tab, setTab] = useState<ConsoleTab>('overview');
-  const tabs = CONSOLE_TABS.filter((entry) => entry.id === 'overview' || me.data?.tabs.includes(entry.id));
+  const tabs = CONSOLE_TABS.filter((entry) => entry.id === 'overview' || me.data?.tabs.includes(entry.id === 'boardroom' ? 'president' : entry.id));
 
   const endStream = useMutation({
     mutationFn: (streamId: string) => api.endStream(streamId),
@@ -141,6 +143,7 @@ export default function AdminPage() {
       </div>
 
       {tab === 'president' && <PresidentPanel />}
+      {tab === 'boardroom' && <BoardroomPanel />}
       {tab === 'settings' && <SettingsPanel owner={me.data?.role === 'owner'} />}
       {tab === 'providers' && <ProvidersPanel />}
       {tab === 'audit' && <AuditPanel />}

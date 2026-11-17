@@ -25,6 +25,16 @@ All JSON. Identity comes from the app's session (bearer token). Console routes r
 
 All `/api/admin/president*` routes are owner-only.
 
+## 6.2a Boardroom (owner only, since v1.1)
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/admin/boardroom` | — | `{ meetings[] }` (without lines, with `lineCount`) |
+| GET | `/api/admin/boardroom/:id` | — | `{ meeting }` — poll while `speaking` is set |
+| POST | `/api/admin/boardroom` | `{ topic, staffIds? }` (one id = private room) | 201 `{ meeting }` · 400 `{ error }` |
+| POST | `/api/admin/boardroom/:id/say` | `{ text }` | `{ meeting }` · 409 `busy` / `closed` |
+| POST | `/api/admin/boardroom/:id/close` | — | `{ meeting }` with `minutesPostId` · 409 |
+
 ## 6.3 Local AI
 
 | Method | Path | Body | Returns |

@@ -20,7 +20,8 @@ import {
   presidentTurn,
   startPresident,
 } from './president.js';
-import { audit, presChat, presPosts, store, users, type PresPost } from '../store.js';
+import { audit, boardMeetings, presChat, presPosts, store, users, type PresPost } from '../store.js';
+import { closeMeeting, openMeeting, ownerSays, view } from './boardroom.js';
 
 type ActorFn = (req: Request) => string;
 
@@ -199,6 +200,57 @@ export function mountAiRoutes(app: Express, actorId: ActorFn): void {
     res.json({ post, emailed });
   });
 
+  /* Boardroom (owner only): round table chaired by the President, or one head in a private room */
+  app.get('/api/admin/boardroom', (req, res) => {
+    if (!seat(req, res, actorId, 'president')) return;
+    res.json({ meetings: boardMeetings.all().slice(0, 50).map((m) => ({ ...view(m), lines: undefined, lineCount: m.lines.length })) });
+  });
+
+  app.get('/api/admin/boardroom/:id', (req, res) => {
+    if (!seat(req, res, actorId, 'president')) return;
+    const m = boardMeetings.get(req.params.id!);
+    if (!m) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    res.json({ meeting: view(m) });
+  });
+
+  app.post('/api/admin/boardroom', (req, res) => {
+    const s = seat(req, res, actorId, 'president');
+    if (!s) return;
+    const staffIds = Array.isArray(req.body?.staffIds) ? (req.body.staffIds as unknown[]).map(String).slice(0, 5) : undefined;
+    const result = openMeeting({ topic: String(req.body?.topic ?? ''), staffIds, by: s.access.email || s.userId });
+    if ('error' in result) {
+      res.status(400).json(result);
+      return;
+    }
+    writeAudit(s.access.email || s.userId, 'boardroom_open', result.id, { title: result.topic, kind: result.kind });
+    res.status(201).json({ meeting: result });
+  });
+
+  app.post('/api/admin/boardroom/:id/say', (req, res) => {
+    if (!seat(req, res, actorId, 'president')) return;
+    const result = ownerSays(req.params.id!, String(req.body?.text ?? ''));
+    if ('error' in result) {
+      res.status(result.error === 'not_found' ? 404 : result.error === 'empty' ? 400 : 409).json(result);
+      return;
+    }
+    res.json({ meeting: result });
+  });
+
+  app.post('/api/admin/boardroom/:id/close', async (req, res) => {
+    const s = seat(req, res, actorId, 'president');
+    if (!s) return;
+    const result = await closeMeeting(req.params.id!, s.access.email || s.userId);
+    if ('error' in result) {
+      res.status(result.error === 'not_found' ? 404 : 409).json(result);
+      return;
+    }
+    writeAudit(s.access.email || s.userId, 'boardroom_close', result.id, { title: result.topic, minutes: result.minutesPostId });
+    res.json({ meeting: result });
+  });
+
   /* Ore, the member's assistant */
   app.get('/api/ore/status', (req, res) => {
     res.json({ enabled: Boolean(valueOf('features.ore')), available: providerConfigured('anthropic', 'ore') || providerConfigured(seatOf('ore').provider, 'ore'), president: presidentName() });
@@ -253,7 +305,7 @@ export function mountAiRoutes(app: Express, actorId: ActorFn): void {
             title: String(use.input.title ?? '').slice(0, 160) || 'Member request',
             body: String(use.input.detail ?? ''),
             memberId: userId,
-            device: String(req.header('x-mm-platform') ?? 'app'),
+            device: String(req.header('x-mm-platform') ?? req.header('x-moneymart-client') ?? 'app'),
           });
           reported.push(post);
           results.push({ type: 'tool_result', tool_use_id: use.id, content: 'Sent to President Ore.' });

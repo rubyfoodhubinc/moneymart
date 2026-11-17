@@ -23,6 +23,8 @@ struct APIError: LocalizedError, Sendable, Equatable {
         case "live_video_unavailable": return String(localized: "Live video is unavailable right now. Try again, or switch to the backup.")
         case "not_live": return String(localized: "This show is not broadcasting right now.")
         case "item_running": return String(localized: "Wait for the item on screen to finish.")
+        case "ore_off": return String(localized: "Ore is switched off right now.")
+        case "ore_unavailable": return String(localized: "Ore can't answer right now — please try again in a moment.")
         case "price_locked": return String(localized: "The starting price cannot change after bidding has begun.")
         default: return nil
         }
@@ -85,7 +87,7 @@ actor APIClient {
         try await send(path, method: "DELETE", body: nil)
     }
 
-    private func send<T: Decodable & Sendable>(_ path: String, method: String, query: [String: String?] = [:], body: Data?) async throws -> T {
+    private func send<T: Decodable & Sendable>(_ path: String, method: String, query: [String: String?] = [:], body: Data?, timeout: TimeInterval? = nil) async throws -> T {
         var components = URLComponents(url: AppConfig.apiBaseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         let items = query.compactMap { key, value in value.flatMap { $0.isEmpty ? nil : URLQueryItem(name: key, value: $0) } }
         if !items.isEmpty { components.queryItems = items.sorted { $0.name < $1.name } }
@@ -94,6 +96,7 @@ actor APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.httpBody = body
+        if let timeout { request.timeoutInterval = timeout }
 
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -295,6 +298,24 @@ extension APIClient {
 
     func orders() async throws -> OrdersResponse { try await get("/api/orders") }
     func wallet() async throws -> WalletResponse { try await get("/api/wallet") }
+
+    // MARK: Ore (member assistant)
+
+    struct OreStatus: Decodable, Sendable { var enabled: Bool; var available: Bool; var president: String }
+    struct OreTurn: Encodable, Sendable { let role: String; let text: String }
+    struct OreReply: Decodable, Sendable {
+        struct Reported: Decodable, Sendable { var id: String; var title: String }
+        var reply: String
+        var reported: [Reported]
+    }
+
+    func oreStatus() async throws -> OreStatus { try await get("/api/ore/status") }
+
+    /// Ore can take a few model steps (answer, report up, answer), so she gets a longer timeout than other calls.
+    func askOre(text: String, history: [OreTurn]) async throws -> OreReply {
+        struct B: Encodable, Sendable { let text: String; let history: [OreTurn] }
+        return try await send("/api/ore/chat", method: "POST", body: try encoder.encode(B(text: text, history: history)), timeout: 60)
+    }
 }
 
 /// A create endpoint answers 201 with a body the client does not need.
