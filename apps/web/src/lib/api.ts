@@ -216,7 +216,50 @@ export interface LiveVideoStatus {
   liveShows: { id: string; title: string; provider: LiveVideoProviderId }[];
 }
 
+
+/* ── Owner console & President Ore ── */
+export interface AdminMe { role: 'owner' | 'executive' | 'manager' | 'support' | 'analyst'; tabs: string[]; email: string; president: string }
+export interface PeriodNumbers { orders: number; gmv: number; buyersPremium: number; disputed: number }
+export interface BusinessReport {
+  days: number; now: PeriodNumbers; previous: PeriodNumbers; members: number; newMembers: number; sellers: number; newSellers: number;
+  liveShows: number; scheduledShows: number; openListings: number; aiCost: { usd: number; calls: number; unpriced: string[] };
+}
+export interface AdminOverview { today: BusinessReport; week: BusinessReport; month: BusinessReport; approvalsWaiting: number }
+export interface PresStaff { id: string; name: string; title: string; department: string; seat: string; role: string; brain: string[]; active: boolean }
+export interface PresPost {
+  id: string; staffId: string | null; kind: string; title: string; body: string; status: string; meta: Record<string, unknown>;
+  createdAt: string; decidedAt?: string; decidedBy?: string; result?: string;
+}
+export interface PresChatLine { id: string; thread: string; role: 'owner' | 'president'; text: string; at: string }
+export interface PresidentOffice {
+  name: string; configured: boolean; staff: PresStaff[]; approvals: PresPost[]; reports: PresPost[]; requests: PresPost[]; recent: PresPost[]; threads: string[];
+}
+export interface ConsoleSetting { key: string; label: string; group: string; value: unknown; defaultValue: unknown }
+export interface AdminProviders {
+  ai: { id: string; label: string; configured: boolean }[];
+  seats: { name: string; provider: string; model: string; backup?: string }[];
+  prices: Record<string, [number, number]>;
+  cost30d: { usd: number; calls: number; unpriced: string[] };
+}
+export interface AuditEntry { id: string; at: string; actor: string; action: string; target: string; detail: Record<string, unknown> }
+
 export const api = {
+  /** Owner console (404 for anyone without a seat). */
+  adminMe: () => request<AdminMe>('/api/admin/me'),
+  adminOverview: () => request<AdminOverview>('/api/admin/overview'),
+  adminProviders: () => request<AdminProviders>('/api/admin/providers'),
+  adminSettings: () => request<{ settings: ConsoleSetting[] }>('/api/admin/settings'),
+  saveAdminSettings: (changes: { key: string; value: unknown }[]) =>
+    request<{ ok: boolean }>('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ changes }) }),
+  adminAudit: (limit = 100) => request<{ entries: AuditEntry[] }>(`/api/admin/audit?limit=${limit}`),
+  president: () => request<PresidentOffice>('/api/admin/president'),
+  presidentChat: (thread = 'main') => request<{ lines: PresChatLine[] }>(`/api/admin/president/chat?thread=${encodeURIComponent(thread)}`),
+  askPresident: (text: string, thread = 'main') =>
+    request<{ reply: PresChatLine; approvalsWaiting: number }>('/api/admin/president/chat', { method: 'POST', body: JSON.stringify({ text, thread }) }),
+  decidePresident: (id: string, decision: 'approve' | 'deny') =>
+    request<{ ok: boolean; post: PresPost }>(`/api/admin/president/decide/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  presidentBriefing: () => request<{ post: PresPost; emailed: boolean }>('/api/admin/president/briefing', { method: 'POST', body: '{}' }),
+
   /** Staff: which live video service new shows use, and the automatic backup. */
   liveVideoStatus: () => request<LiveVideoStatus>('/api/admin/live-video'),
   setLiveVideo: (body: { primary?: LiveVideoProviderId; autoFallback?: boolean }) =>

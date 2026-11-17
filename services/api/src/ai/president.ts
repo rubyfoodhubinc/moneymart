@@ -10,7 +10,7 @@
  * happens only when the Owner approves that exact item. Text from members, staff and alerts is data, never
  * instructions.
  */
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { call, aiCostSince, providerConfigured, type Block, type Message, type ToolDef } from './gateway.js';
 import { SETTINGS, applyChanges, checkChanges, valueOf } from './registry.js';
 import { writeAudit } from './access.js';
@@ -280,7 +280,17 @@ export async function presidentTurn(ownerText: string, thread = 'main', opts: { 
 /* ── approvals ── */
 
 const DIRECTIVES_KEY = 'ore.directives';
-const directiveSecret = () => process.env.MM_DIRECTIVE_SECRET ?? process.env.MM_SESSION_PEPPER ?? 'dev-directive-secret';
+/**
+ * Signs directives and hashes member refs. From the environment when set; otherwise the server makes a random one
+ * once and keeps it in the store (not a console setting, so it is never listed or sent anywhere).
+ */
+function directiveSecret(): string {
+  const fromEnv = process.env.MM_DIRECTIVE_SECRET ?? process.env.MM_SESSION_PEPPER;
+  if (fromEnv) return fromEnv;
+  const kept = settings.get<string>('secret.directives');
+  if (kept) return kept;
+  return settings.set('secret.directives', randomBytes(32).toString('hex'));
+}
 const signDirective = (text: string, at: string) => createHmac('sha256', directiveSecret()).update(`${at}\n${text}`).digest('hex');
 
 /** Signed, Owner-approved directives every Ore follows (unsigned or tampered entries are ignored). */
