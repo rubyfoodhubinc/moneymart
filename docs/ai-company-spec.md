@@ -101,3 +101,27 @@ cases.
 | **D. Boardroom** | Five executive units, round table with transcript, individual offices, decisions → approvals; voice. |
 | **E. Didit verification** | Seller verification flow, webhook, go-live gate, approvals. |
 | **F. Change control** | Remote config applied on approval with revert; build requests → GitHub; domain/DNS once on Cloudflare. |
+
+## 7. Source map — four Presidents merged into President Ore (owner, 2026-11-17)
+
+Owner: "use the full model of President Eteka, Ruby, Ava and Ada… build from all into one, especially Eteka."
+Base = **Eteka** (Every Media AI, `/Volumes/Mac4/Development/Projects/EveryMediaAI`, services/api/src). Ported
+module by module from Hono + Supabase to MoneyMart's Express + snapshot store, plain HTTPS (no AI SDKs).
+
+| MoneyMart module | Taken from | What it brings |
+|---|---|---|
+| `ai/gateway.ts` | Eteka `council/llm.ts`, `llm-meter.ts`; Ruby `lib/ai/gateway.ts` | One caller for Claude, OpenAI, xAI, Kimi (+ OpenAI-compatible); second key on a refused key; one backup model; every call priced into operating cost; daily budgets that fail closed (Ruby). |
+| `ai/settings` registry | Eteka `settings.ts` (`PRESIDENT_LOCKED`); Ruby denylist | Typed settings with history; locked prefixes the AI can never change (sign-in, team, keys, security, her own approvals). |
+| `ai/access.ts` + audit | Eteka `access.ts`; Ava `admin-auth.ts` roles + `admin_audit` | Owner / admin / manager / support / analyst; every admin and AI action audited. |
+| `ai/president.ts` | Eteka `president.ts` | Office (President Ore + Finance, Marketing, Operations, Sales, Tech Director, each with a brain and own model seat); chat loop with tools; drafts → decide (approve / deny) with atomic claim; daily + weekly reports. |
+| `ai/act.ts` | Eteka `president-act.ts`; Ruby `adminActions.ts` | Acting on the owner's own words (verbatim quote guard, taint after outside text); approved actions run through the real admin routes; risk flags on money/delete. |
+| `ai/boardroom.ts` | Eteka `boardroom.ts`; Ruby `board.ts` (secretary minutes, matters) | Round table chaired by the President, each seat its own model + voice, owner interjects, minutes → reports, "approve item 2" decisions; private one-on-one rooms. |
+| `ai/directives.ts` | Eteka `directives.ts` | Owner-approved, HMAC-signed directives appended to every Ore. |
+| `ai/ore.ts` | Eteka `assistant/*` (member Eteka) | The in-app Ore: chat with app tools; `request_feature` / feedback / problems reported up as anonymous, de-duplicated requests. |
+| `ai/memory.ts` | Ada (NetPulsy) memory module; Ava `president-memory.ts` | Typed memories, dedupe, injection guard, token budget; secrets and personal data refused. |
+| `ai/watch.ts` + integrations | Ava `president-watch.ts`, `president-integrations.ts` | 60 s watch (errors, latency, sign-in attacks) and provider health probes → alerts; critical alerts email the owner. |
+| `ai/voice.ts` | Ava `president-voice.ts`; Eteka xAI realtime relay | Speech with fallback (Cartesia → ElevenLabs → OpenAI); live calls with the President. |
+| `ai/briefing.ts` | Eteka `startPresident`/`startReports`; Ruby `brief.ts` | Daily briefing by email + console; still written from the numbers if AI is down. |
+| `ai/changes.ts` | Ava GitHub workflow_dispatch → PR; Eteka build tickets | Approved code changes become a branch + pull request; never merges or deploys by itself. |
+| comms, owner alerts, location, Didit | Eteka `comms.ts`, `owner-alerts.ts`, `location.ts`, `didit.ts`; Ava `verify.ts` | Notifications (push/email/inbox, auto + manual), owner alerts, per-user location, seller verification. |
+| Web console pages | Eteka `admin-portal.tsx`, `admin-president.tsx`, `president-chat.tsx`, `boardroom.tsx`, `private-room.tsx`, `admin-comms.tsx` | Owner console in MoneyMart's own look. |
