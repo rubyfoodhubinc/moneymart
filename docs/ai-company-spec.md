@@ -24,7 +24,7 @@ rebuilt for MoneyMart's Express API, Postgres store and native iOS app.
 | **Tech Director** | Uptime, provider health, releases, security, build requests. | Claude |
 | (spare) | Kimi available for any unit or Ore task. | Kimi |
 
-Providers on hand: Claude, OpenAI, Cartesia, ElevenLabs, xAI, Kimi (keys in Railway).
+Providers on hand: Claude, OpenAI, Cartesia, ElevenLabs, xAI, Kimi, Z.ai (keys in Railway).
 
 ## 2. Rules of authority (safety rails)
 
@@ -87,7 +87,7 @@ Providers on hand: Claude, OpenAI, Cartesia, ElevenLabs, xAI, Kimi (keys in Rail
 ## 5. Verification (Didit)
 
 Seller identity / business verification via Didit (owner adds keys on Railway:
-`DIDIT_API_KEY`, `DIDIT_WORKFLOW_ID`, `DIDIT_WEBHOOK_SECRET`). Going live requires a
+`DIDIT_API_KEY`, `DIDIT_KYC_WORKFLOWID_KEY`, `DIDIT_KYB_WORKFLOWID_KEY`, `DIDIT_WEBHOOK_SECRET`). Going live requires a
 verified seller; results land in Approvals; President summarises, Owner decides edge
 cases.
 

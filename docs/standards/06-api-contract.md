@@ -41,9 +41,9 @@ Optional header `x-<app>-platform: ios | android | web` is recorded on reported 
 | `<APP>_OWNER_EMAILS` | Comma-separated owner emails |
 | `ANTHROPIC_PRESIDENT_API_KEY` | President, staff, boardroom |
 | `ANTHROPIC_API_KEY` | Local AI and everything else |
-| `OPENAI_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY` | Other seats |
+| `OPENAI_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY`, `Z_AI_API_KEY` | Other seats |
 | `CARTESIA_API_KEY`, `ELEVENLABS_API_KEY` | Voice |
 | `<APP>_DIRECTIVE_SECRET` | Signs directives and hashes member refs |
 | `RESEND_API_KEY`, `RESEND_FROM` | Briefing and owner email |
-| `DIDIT_API_KEY`, `DIDIT_WORKFLOW_ID`, `DIDIT_WEBHOOK_SECRET` | Identity verification |
+| `DIDIT_API_KEY`, `DIDIT_KYC_WORKFLOWID_KEY` (people), `DIDIT_KYB_WORKFLOWID_KEY` (businesses), `DIDIT_WEBHOOK_SECRET` | Identity and business verification |
 | `<APP>_ANTHROPIC_BASE` | Test stand-in base URL |

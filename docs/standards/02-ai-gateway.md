@@ -11,6 +11,7 @@ Reference: `services/api/src/ai/gateway.ts`.
 | OpenAI | Chat completions | `OPENAI_API_KEY` |
 | xAI | OpenAI-compatible | `XAI_API_KEY` |
 | Kimi (Moonshot) | OpenAI-compatible | `MOONSHOT_API_KEY`, `KIMI_API_KEY` |
+| Z.ai (GLM) | OpenAI-compatible | `Z_AI_API_KEY` |
 | Voice (Cartesia, ElevenLabs) | Separate voice module | `CARTESIA_API_KEY`, `ELEVENLABS_API_KEY` |
 
 The President's office MUST use its own key, so members' traffic can never drain the Owner's AI.

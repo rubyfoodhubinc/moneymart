@@ -51,14 +51,16 @@ async function emailOwners(subject: string, text: string): Promise<boolean> {
   }
 }
 
-const AI_PROVIDERS = [
+const AI_PROVIDERS: { id: string; label: string; env: string[]; also?: string[] }[] = [
   { id: 'anthropic', label: 'Claude (Anthropic)', env: ['ANTHROPIC_PRESIDENT_API_KEY', 'PRESIDENT_ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY'] },
   { id: 'openai', label: 'OpenAI', env: ['OPENAI_API_KEY'] },
   { id: 'xai', label: 'xAI (Grok)', env: ['XAI_API_KEY'] },
   { id: 'kimi', label: 'Kimi (Moonshot)', env: ['MOONSHOT_API_KEY', 'KIMI_API_KEY'] },
+  { id: 'zai', label: 'Z.ai (GLM)', env: ['Z_AI_API_KEY', 'ZAI_API_KEY'] },
   { id: 'cartesia', label: 'Cartesia (voice)', env: ['CARTESIA_API_KEY'] },
-  { id: 'elevenlabs', label: 'ElevenLabs (voice)', env: ['ELEVENLABS_API_KEY'] },
-  { id: 'didit', label: 'Didit (verification)', env: ['DIDIT_API_KEY'] },
+  { id: 'elevenlabs', label: 'ElevenLabs (voice)', env: ['ELEVENLABS_API_KEY', 'ELEVENLAB_API_KEY'] },
+  { id: 'didit_kyc', label: 'Didit — person checks (KYC)', env: ['DIDIT_API_KEY'], also: ['DIDIT_KYC_WORKFLOWID_KEY'] },
+  { id: 'didit_kyb', label: 'Didit — business checks (KYB)', env: ['DIDIT_API_KEY'], also: ['DIDIT_KYB_WORKFLOWID_KEY'] },
   { id: 'resend', label: 'Resend (email)', env: ['RESEND_API_KEY'] },
 ];
 
@@ -99,7 +101,7 @@ export function mountAiRoutes(app: Express, actorId: ActorFn): void {
   app.get('/api/admin/providers', (req, res) => {
     if (!seat(req, res, actorId, 'providers')) return;
     res.json({
-      ai: AI_PROVIDERS.map((p) => ({ id: p.id, label: p.label, configured: p.env.some((k) => Boolean(process.env[k])) })),
+      ai: AI_PROVIDERS.map((p) => ({ id: p.id, label: p.label, configured: p.env.some((k) => Boolean(process.env[k])) && (p.also ?? []).every((k) => Boolean(process.env[k])) })),
       seats: ['president', 'finance', 'operations', 'marketing', 'sales', 'tech', 'ore', 'research', 'quick'].map((name) => ({ name, ...seatOf(name) })),
       prices: priceList(),
       cost30d: aiCostSince(30),

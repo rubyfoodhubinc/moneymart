@@ -16,7 +16,7 @@
  */
 import { aiSpend, settings } from '../store.js';
 
-export type Provider = 'anthropic' | 'openai' | 'xai' | 'kimi';
+export type Provider = 'anthropic' | 'openai' | 'xai' | 'kimi' | 'zai';
 export type Role = 'president' | 'staff' | 'ore' | 'board' | 'quick';
 
 export interface Seat {
@@ -62,6 +62,8 @@ export function keyEnvFor(provider: Provider, role: Role): string[] {
       return ['XAI_API_KEY'];
     case 'kimi':
       return ['MOONSHOT_API_KEY', 'KIMI_API_KEY'];
+    case 'zai':
+      return ['Z_AI_API_KEY', 'ZAI_API_KEY'];
   }
 }
 
@@ -69,6 +71,7 @@ const OPENAI_SHAPE: Record<Exclude<Provider, 'anthropic'>, string> = {
   openai: 'https://api.openai.com/v1/chat/completions',
   xai: 'https://api.x.ai/v1/chat/completions',
   kimi: 'https://api.moonshot.ai/v1/chat/completions',
+  zai: 'https://api.z.ai/api/paas/v4/chat/completions',
 };
 
 export function providerKey(provider: Provider, role: Role, second = false, env: NodeJS.ProcessEnv = process.env): string | undefined {
