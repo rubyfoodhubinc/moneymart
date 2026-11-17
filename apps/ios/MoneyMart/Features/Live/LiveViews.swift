@@ -91,6 +91,16 @@ final class StreamRoom {
                 guard let self, payload.streamId == id else { return }
                 Task { await self.focus(on: payload.auctionId) }
             },
+            // The host started (or moved) the broadcast: reload so viewers join the video.
+            realtime.on("stream:started", as: StreamStatePayload.self) { [weak self] payload in
+                guard let self, payload.streamId == id else { return }
+                Task { await self.load() }
+            },
+            realtime.on("stream:ended", as: StreamStatePayload.self) { [weak self] payload in
+                guard let self, payload.streamId == id else { return }
+                self.stream?.status = "ended"
+                self.stream?.liveVideoProvider = nil
+            },
         ]
     }
 
@@ -106,6 +116,8 @@ final class StreamRoom {
         Realtime.shared.emit("chat:send", ["streamId": streamId, "body": String(body.prefix(400))])
     }
 }
+
+private struct StreamStatePayload: Decodable { var streamId: String }
 
 struct HLSPlayerView: UIViewControllerRepresentable {
     let url: URL
@@ -157,6 +169,7 @@ struct StreamView: View {
     @State private var draft = ""
     @State private var showBidSheet = false
     @State private var showChat = true
+    @State private var video = LiveVideoSession(role: .viewer)
     @Environment(SessionStore.self) private var session
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
@@ -169,7 +182,10 @@ struct StreamView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if let url = room.stream?.playbackURL {
+            if broadcasting {
+                LiveVideoSurface(view: video.videoView).ignoresSafeArea()
+                    .overlay { if !video.isLive { joiningCard } }
+            } else if let url = room.stream?.playbackURL {
                 HLSPlayerView(url: url).ignoresSafeArea()
             } else {
                 ArtworkView(source: room.stream?.posterUrl, symbol: "dot.radiowaves.left.and.right").ignoresSafeArea()
@@ -195,7 +211,11 @@ struct StreamView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .task { await room.load() }
-        .onDisappear { room.leave() }
+        .task(id: broadcastKey) { await joinVideo() }
+        .onDisappear {
+            video.stop()
+            room.leave()
+        }
         .sheet(isPresented: $showBidSheet) {
             if let lot = room.lot { BidSheet(controller: lot).presentationDetents([.medium, .large]) }
         }
@@ -228,6 +248,34 @@ struct StreamView: View {
             }
             .accessibilityLabel(showChat ? Text("Hide chat") : Text("Show chat"))
         }
+    }
+
+    /// A real broadcast (IVS or Cloudflare) rather than an HLS feed.
+    private var broadcasting: Bool { room.stream?.isLive == true && room.stream?.liveVideoProvider != nil }
+    private var broadcastKey: String { "\(broadcasting)-\(room.stream?.liveVideoProvider ?? "")" }
+
+    private func joinVideo() async {
+        guard broadcasting else { video.stop(endState: .idle); return }
+        do {
+            let watch = try await APIClient.shared.watch(streamId: streamId)
+            video.startWatching(watch.viewer)
+        } catch {
+            video.stop(endState: .failed(error.localizedDescription))
+        }
+    }
+
+    private var joiningCard: some View {
+        VStack(spacing: 10) {
+            if case .failed(let reason) = video.state {
+                Image(systemName: "wifi.exclamationmark").font(.system(size: 30)).foregroundStyle(MM.Color.gold)
+                Text(reason).font(MM.Font.body(14)).foregroundStyle(.white).multilineTextAlignment(.center)
+                Button("Try again") { Task { await joinVideo() } }.buttonStyle(.goldCompact)
+            } else {
+                ProgressView().tint(MM.Color.gold)
+                Text("Joining the show…").font(MM.Font.body(14)).foregroundStyle(.white)
+            }
+        }
+        .padding(22).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: MM.Radius.xl))
     }
 
     private var offlineCard: some View {

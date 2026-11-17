@@ -20,6 +20,8 @@ struct APIError: LocalizedError, Sendable, Equatable {
         case "title_and_starting_price_required": return String(localized: "A title and starting price are required.")
         case "seller_profile_required": return String(localized: "Finish seller setup before scheduling a show.")
         case "listing_in_other_show": return String(localized: "That item is already in another show.")
+        case "live_video_unavailable": return String(localized: "Live video is unavailable right now. Try again, or switch to the backup.")
+        case "not_live": return String(localized: "This show is not broadcasting right now.")
         default: return nil
         }
     }
@@ -237,6 +239,22 @@ extension APIClient {
         struct B: Encodable, Sendable { let show: ShowInput; let startTimes: [String] }
         return try await post("/api/streams/batch", body: B(show: show, startTimes: startTimes))
     }
+
+    /// Opens (or reuses) the show's live room and returns the host's broadcast pass.
+    /// `useBackup` moves the show to the other video provider.
+    func goLive(streamId: String, useBackup: Bool = false) async throws -> GoLiveResponse {
+        struct B: Encodable, Sendable { let useBackup: Bool }
+        return try await post("/api/streams/\(streamId)/go-live", body: B(useBackup: useBackup))
+    }
+
+    func watch(streamId: String) async throws -> WatchResponse { try await get("/api/streams/\(streamId)/watch") }
+
+    /// Puts a queued item on screen (starts its countdown).
+    func runItem(streamId: String, auctionId: String) async throws -> StreamActionResponse {
+        try await post("/api/streams/\(streamId)/items/\(auctionId)/activate", body: EmptyBody())
+    }
+
+    func endStream(id: String) async throws -> StreamActionResponse { try await post("/api/streams/\(id)/end", body: EmptyBody()) }
 
     func setReminder(streamId: String, on: Bool) async throws -> ReminderResponse {
         struct B: Encodable, Sendable { let on: Bool }

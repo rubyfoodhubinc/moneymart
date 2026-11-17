@@ -326,6 +326,7 @@ struct ShowManagerView: View {
     @State private var confirmCancel = false
     @State private var working = false
     @State private var editing = false
+    @State private var hosting = false
 
     var body: some View {
         ScrollView {
@@ -373,6 +374,9 @@ struct ShowManagerView: View {
                 }
             }
         }
+        .fullScreenCover(isPresented: $hosting, onDismiss: { Task { await load(); onChange() } }) {
+            HostLiveView(streamId: streamId)
+        }
         .sheet(isPresented: $editing) {
             if let stream { ScheduleShowSheet(existing: stream) { _ in Task { await load(); onChange() } } }
         }
@@ -419,9 +423,12 @@ struct ShowManagerView: View {
             if let notes = stream.description, !notes.isEmpty {
                 Text(notes).font(MM.Font.body(14)).foregroundStyle(MM.Color.ink2)
             }
-            if stream.isScheduled {
-                Label("Going live from your phone arrives in the next update. Build your run order now.", systemImage: "info.circle")
-                    .font(MM.Font.body(13)).foregroundStyle(MM.Color.ink3)
+            if stream.isScheduled || stream.isLive {
+                Button { hosting = true } label: {
+                    Label(stream.isLive ? "Return to your live show" : "Go live", systemImage: "dot.radiowaves.left.and.right")
+                }
+                .buttonStyle(.gold)
+                .accessibilityIdentifier("show-go-live")
             }
         }
         .padding(14)

@@ -196,6 +196,8 @@ struct LiveStream: Codable, Hashable, Identifiable, Sendable {
     var shipping: ShowShipping?
     var reminderCount: Int?
     var shareUrl: String?
+    /// `ivs` or `cloudflare` while a real broadcast is running.
+    var liveVideoProvider: String?
     var scheduledStartTime: String?
     var endTime: String?
     var status: String
@@ -482,4 +484,36 @@ struct ReminderResponse: Codable, Sendable {
 struct MyStreamsResponse: Codable, Sendable {
     var upcoming: [LiveStream]
     var past: [LiveStream]
+}
+
+/// Broadcast credentials for the host (`POST /api/streams/:id/go-live`).
+struct BroadcastCredentials: Codable, Sendable {
+    struct IVS: Codable, Sendable { var stageArn: String?; var token: String; var participantId: String? }
+    struct Cloudflare: Codable, Sendable { var whipUrl: String }
+    var provider: String
+    var ivs: IVS?
+    var cloudflare: Cloudflare?
+}
+
+struct GoLiveResponse: Codable, Sendable {
+    struct Failover: Codable, Sendable { var from: String; var reason: String }
+    var stream: LiveStream
+    var broadcast: BroadcastCredentials
+    var failedOver: Failover?
+}
+
+/// Viewer credentials (`GET /api/streams/:id/watch`).
+struct WatchResponse: Codable, Sendable {
+    struct Viewer: Codable, Sendable {
+        struct IVS: Codable, Sendable { var token: String }
+        struct Cloudflare: Codable, Sendable { var whepUrl: String }
+        var provider: String
+        var ivs: IVS?
+        var cloudflare: Cloudflare?
+    }
+    var viewer: Viewer
+}
+
+struct StreamActionResponse: Codable, Sendable {
+    var stream: LiveStream?
 }

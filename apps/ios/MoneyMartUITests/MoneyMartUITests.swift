@@ -198,6 +198,14 @@ final class MoneyMartUITests: XCTestCase {
         app.navigationBars.buttons["Done"].tap()
         XCTAssertTrue(app.staticTexts["QA Candy Crate"].waitForExistence(timeout: 10), "the item is in the run order")
 
+        // The host console opens from the show, ready to go live.
+        let goLive = app.buttons["show-go-live"]
+        XCTAssertTrue(goLive.waitForExistence(timeout: 5), "a scheduled show offers Go live")
+        goLive.tap()
+        XCTAssertTrue(app.buttons["host-go-live"].waitForExistence(timeout: 10), "the host console shows the Go live button")
+        app.buttons["host-close"].tap()
+        XCTAssertTrue(goLive.waitForExistence(timeout: 10), "closing before going live returns to the show")
+
         // Plan a twice-weekly run with the guided scheduler.
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'show-str_'"))
