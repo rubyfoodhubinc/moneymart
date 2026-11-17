@@ -71,6 +71,11 @@ const SUITES = [
     detail: 'signed IVS calls, Cloudflare inputs, admin switch, automatic fallback, teardown',
   },
   {
+    name: 'President Ore & Owner console',
+    script: 'verify-president.mjs',
+    detail: 'owner-only office, drafts until approved, locked AI settings, signed directives, Ore requests, audit, AI cost',
+  },
+  {
     name: 'Concurrency across auctions',
     script: 'verify-concurrency.mjs',
     detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',

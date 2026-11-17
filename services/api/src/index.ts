@@ -71,6 +71,7 @@ import {
   storefronts,
 } from './store.js';
 import { seed, reseed } from './seed.js';
+import { mountAiRoutes, startAiCompany } from './ai/routes.js';
 
 const PORT = Number(process.env.PORT ?? 4317);
 const app = express();
@@ -1281,6 +1282,9 @@ function liveVideoStatus() {
     liveShows: streams.live().filter((s) => s.video).map((s) => ({ id: s.id, title: s.title, provider: s.video!.provider })),
   };
 }
+
+/* Owner console: President Ore's office, settings, audit; Ore in the app. */
+mountAiRoutes(app, (req) => actorId(req));
 
 /** Staff only. 404 for everyone else, so the console's existence is not confirmed. */
 function requireStaff(req: Request, res: Response): string | null {
@@ -3619,6 +3623,7 @@ if (shouldSeed(restoredRecords)) {
 
 persistence?.start();
 startLimiterSweep();
+startAiCompany();
 
 /**
  * Expired codes and sessions are swept on an interval. Unref'd so the timer

@@ -85,8 +85,120 @@ export const db = {
   categoryRequests: new Map<string, CategoryRequest>(),
   /** Platform settings staff change at runtime (e.g. the live video provider). */
   settings: new Map<string, unknown>(),
+  /** AI usage and cost per day, provider, model and role (operating cost). */
+  aiSpend: new Map<string, AiSpendRow>(),
+  /** Every Owner-console and AI action: who, what, when. */
+  audit: new Map<string, AuditRow>(),
+  /** President Ore's office: staff, workspace items (reports, drafts, requests) and the owner's chat. */
+  presStaff: new Map<string, PresStaff>(),
+  presPosts: new Map<string, PresPost>(),
+  presChat: new Map<string, PresChatLine>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
+};
+
+/* ── AI spend ──────────────────────────────────────────── */
+export interface AiSpendRow {
+  id: string;
+  day: string;
+  provider: string;
+  model: string;
+  role: string;
+  calls: number;
+  tokensIn: number;
+  tokensOut: number;
+  usd: number;
+  /** False when the model has no price set (recorded, never assumed free). */
+  priced: boolean;
+}
+export const aiSpend = {
+  all: () => [...db.aiSpend.values()],
+  get: (id: string) => db.aiSpend.get(id),
+  save: (row: AiSpendRow) => {
+    db.aiSpend.set(row.id, row);
+    return row;
+  },
+};
+
+/* ── Audit log ─────────────────────────────────────────── */
+export interface AuditRow {
+  id: string;
+  at: string;
+  actor: string;
+  action: string;
+  target: string;
+  detail: Record<string, unknown>;
+}
+export const audit = {
+  add: (row: AuditRow) => {
+    db.audit.set(row.id, row);
+    // Bounded: the newest 20,000 entries are kept.
+    if (db.audit.size > 20_000) db.audit.delete(db.audit.keys().next().value!);
+    return row;
+  },
+  recent: (n = 200) => [...db.audit.values()].slice(-n).reverse(),
+};
+
+/* ── President Ore's office ────────────────────────────── */
+export interface PresStaff {
+  id: string;
+  name: string;
+  title: string;
+  department: string;
+  /** The AI seat (model) this member thinks with. */
+  seat: string;
+  role: string;
+  brain: string[];
+  active: boolean;
+  sort: number;
+}
+export type PresPostKind = 'report' | 'request' | 'alert' | 'draft_change' | 'draft_directive' | 'draft_member_message' | 'draft_post' | 'draft_ad';
+export type PresPostStatus = 'info' | 'pending' | 'approved' | 'denied' | 'done' | 'failed';
+export interface PresPost {
+  id: string;
+  staffId: string | null;
+  kind: PresPostKind;
+  title: string;
+  body: string;
+  status: PresPostStatus;
+  meta: Record<string, unknown>;
+  createdAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  result?: string;
+}
+export interface PresChatLine {
+  id: string;
+  thread: string;
+  role: 'owner' | 'president';
+  text: string;
+  at: string;
+}
+export const presStaff = {
+  all: () => [...db.presStaff.values()].sort((a, b) => a.sort - b.sort),
+  get: (id: string) => db.presStaff.get(id),
+  save: (s: PresStaff) => {
+    db.presStaff.set(s.id, s);
+    return s;
+  },
+};
+export const presPosts = {
+  all: () => [...db.presPosts.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  get: (id: string) => db.presPosts.get(id),
+  save: (p: PresPost) => {
+    db.presPosts.set(p.id, p);
+    if (db.presPosts.size > 5_000) db.presPosts.delete(db.presPosts.keys().next().value!);
+    return p;
+  },
+};
+export const presChat = {
+  thread: (thread: string, n = 40) => [...db.presChat.values()].filter((l) => l.thread === thread).slice(-n),
+  threads: () => [...new Set([...db.presChat.values()].map((l) => l.thread))],
+  add: (l: PresChatLine) => {
+    db.presChat.set(l.id, l);
+    if (db.presChat.size > 10_000) db.presChat.delete(db.presChat.keys().next().value!);
+    return l;
+  },
 };
 
 /* ── Platform settings ─────────────────────────────────── */
@@ -407,6 +519,11 @@ const COLLECTIONS = [
   'oauthIdentities',
   'categoryRequests',
   'settings',
+  'aiSpend',
+  'audit',
+  'presStaff',
+  'presPosts',
+  'presChat',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];
