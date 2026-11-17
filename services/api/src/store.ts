@@ -14,6 +14,7 @@ import type {
   Auction,
   AutoBid,
   Bid,
+  CategoryRequest,
   ChatMessage,
   Item,
   Order,
@@ -80,8 +81,20 @@ export const db = {
    * the link would silently create a duplicate account on the next sign-in.
    */
   oauthIdentities: new Map<string, string>(),
+  /** Seller requests for categories the taxonomy does not cover yet. */
+  categoryRequests: new Map<string, CategoryRequest>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
+};
+
+/* ── Category requests ─────────────────────────────────── */
+export const categoryRequests = {
+  all: () => [...db.categoryRequests.values()],
+  byUser: (userId: string) => [...db.categoryRequests.values()].filter((r) => r.userId === userId),
+  create: (request: CategoryRequest) => {
+    db.categoryRequests.set(request.id, request);
+    return request;
+  },
 };
 
 /* ── Users ─────────────────────────────────────────────── */
@@ -381,6 +394,7 @@ const COLLECTIONS = [
    * provisioned a second account for the same person.
    */
   'oauthIdentities',
+  'categoryRequests',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

@@ -18,6 +18,8 @@ struct APIError: LocalizedError, Sendable, Equatable {
         case "rate_limited": return String(localized: "Too many attempts. Please wait a moment.")
         case "invalid_images": return String(localized: "One of the photos could not be accepted.")
         case "title_and_starting_price_required": return String(localized: "A title and starting price are required.")
+        case "seller_profile_required": return String(localized: "Finish seller setup before scheduling a show.")
+        case "listing_in_other_show": return String(localized: "That item is already in another show.")
         default: return nil
         }
     }
@@ -69,6 +71,14 @@ actor APIClient {
 
     func patch<T: Decodable & Sendable, B: Encodable & Sendable>(_ path: String, body: B) async throws -> T {
         try await send(path, method: "PATCH", body: try encoder.encode(body))
+    }
+
+    func put<T: Decodable & Sendable, B: Encodable & Sendable>(_ path: String, body: B) async throws -> T {
+        try await send(path, method: "PUT", body: try encoder.encode(body))
+    }
+
+    func delete<T: Decodable & Sendable>(_ path: String) async throws -> T {
+        try await send(path, method: "DELETE", body: nil)
     }
 
     private func send<T: Decodable & Sendable>(_ path: String, method: String, query: [String: String?] = [:], body: Data?) async throws -> T {
@@ -157,6 +167,7 @@ extension APIClient {
         var title: String
         var description: String
         var categoryId: String
+        var subcategoryId: String?
         var condition: String
         var auctionType: String
         var startingPrice: Double
@@ -168,6 +179,67 @@ extension APIClient {
 
     func createListing(_ listing: NewListing) async throws -> CreateListingResponse { try await post("/api/auctions", body: listing) }
 
+    /// The caller's own listings, used to fill a show.
+    func myListings(limit: Int = 200) async throws -> Paginated<Auction> {
+        try await get("/api/auctions", query: ["seller": "me", "limit": String(limit)])
+    }
+
+    // MARK: Categories
+
+    func categories() async throws -> CategoriesResponse { try await get("/api/categories") }
+
+    func requestCategory(name: String, parentId: String?, note: String?) async throws -> OkOrCreated {
+        struct B: Encodable, Sendable { let name: String; let parentId: String?; let note: String? }
+        return try await post("/api/categories/requests", body: B(name: name, parentId: parentId, note: note))
+    }
+
+    // MARK: Seller setup
+
+    struct SellerProfileInput: Encodable, Sendable {
+        var entity: String
+        var businessType: String?
+        var mainCategory: String
+        var subcategories: [String]
+        var channels: [String]
+        var socials: [String: String]
+        var monthlyRevenue: String?
+        var inventorySize: String?
+        var teamSize: String?
+        var weeklyLiveHours: String?
+        var returnAddress: PostalAddress
+    }
+
+    func saveSellerProfile(_ input: SellerProfileInput) async throws -> SellerProfileResponse {
+        try await put("/api/me/seller-profile", body: input)
+    }
+
+    // MARK: Shows
+
+    struct ShowInput: Encodable, Sendable {
+        var title: String?
+        var categoryId: String?
+        var subcategoryId: String?
+        var scheduledStartTime: String?
+        var description: String?
+        var format: String?
+        var visibility: String?
+        var language: String?
+    }
+
+    func myStreams() async throws -> MyStreamsResponse { try await get("/api/me/streams") }
+    func createStream(_ input: ShowInput) async throws -> StreamResponse { try await post("/api/streams", body: input) }
+    func updateStream(id: String, _ input: ShowInput) async throws -> StreamResponse { try await patch("/api/streams/\(id)", body: input) }
+    func cancelStream(id: String) async throws -> StreamResponse { try await delete("/api/streams/\(id)") }
+
+    func addToShow(streamId: String, auctionId: String) async throws -> StreamResponse {
+        struct B: Encodable, Sendable { let auctionId: String }
+        return try await post("/api/streams/\(streamId)/items", body: B(auctionId: auctionId))
+    }
+
+    func removeFromShow(streamId: String, auctionId: String) async throws -> StreamResponse {
+        try await delete("/api/streams/\(streamId)/items/\(auctionId)")
+    }
+
     func streams(status: String? = nil) async throws -> ListResponse<LiveStream> { try await get("/api/streams", query: ["status": status]) }
     func stream(id: String) async throws -> StreamDetailResponse { try await get("/api/streams/\(id)") }
 
@@ -177,3 +249,6 @@ extension APIClient {
     func orders() async throws -> OrdersResponse { try await get("/api/orders") }
     func wallet() async throws -> WalletResponse { try await get("/api/wallet") }
 }
+
+/// A create endpoint answers 201 with a body the client does not need.
+struct OkOrCreated: Decodable, Sendable {}

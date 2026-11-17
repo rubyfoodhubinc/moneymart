@@ -23,6 +23,43 @@ struct User: Codable, Hashable, Identifiable, Sendable {
     var followingCount: Int?
     var isPro: Bool?
     var preferences: UserPreferences?
+    /// Present once seller setup is finished; private to the account owner.
+    var sellerProfile: SellerProfile?
+}
+
+struct PostalAddress: Codable, Hashable, Sendable {
+    var fullName: String
+    var line1: String
+    var line2: String?
+    var city: String
+    var region: String
+    var postalCode: String
+    var countryCode: String
+}
+
+struct SellerProfile: Codable, Hashable, Sendable {
+    var entity: String
+    var businessType: String?
+    var mainCategory: String
+    var subcategories: [String]
+    var channels: [String]
+    var socials: [String: String]
+    var monthlyRevenue: String?
+    var inventorySize: String?
+    var teamSize: String?
+    var weeklyLiveHours: String?
+    var returnAddress: PostalAddress
+    var completedAt: String?
+    var updatedAt: String?
+}
+
+/// `GET /api/categories` — the taxonomy with live activity, used to sort by popularity.
+struct CategoryActivity: Codable, Hashable, Identifiable, Sendable {
+    let id: String
+    var order: Int?
+    var liveViewers: Int?
+    var liveShows: Int?
+    var listings: Int?
 }
 
 struct UserPreferences: Codable, Hashable, Sendable {
@@ -54,6 +91,7 @@ struct Item: Codable, Hashable, Identifiable, Sendable {
     var title: String
     var description: String?
     var categoryId: String?
+    var subcategoryId: String?
     var condition: String?
     var images: [String]
     var provenance: String?
@@ -145,7 +183,13 @@ struct LiveStream: Codable, Hashable, Identifiable, Sendable {
     var creatorId: String?
     var title: String
     var category: String?
+    var subcategory: String?
+    var description: String?
+    var format: String?
+    var visibility: String?
+    var language: String?
     var scheduledStartTime: String?
+    var endTime: String?
     var status: String
     var viewerCount: Int
     var peakViewerCount: Int?
@@ -161,6 +205,8 @@ struct LiveStream: Codable, Hashable, Identifiable, Sendable {
     var queuedCount: Int?
 
     var isLive: Bool { status == "live" }
+    var isScheduled: Bool { status == "scheduled" }
+    var startDate: Date? { scheduledStartTime.flatMap(ISODate.parse) }
     /// The URL a player should open, resolved server-side; falls back to the raw HLS field.
     var playbackURL: URL? {
         if let raw = playback?.url, let url = URL(string: raw) { return url }
@@ -393,4 +439,22 @@ enum ISODate {
         lock.lock(); defer { lock.unlock() }
         return fractional.date(from: text) ?? plain.date(from: text)
     }
+}
+
+struct CategoriesResponse: Codable, Sendable {
+    var items: [CategoryActivity]
+}
+
+struct SellerProfileResponse: Codable, Sendable {
+    var sellerProfile: SellerProfile?
+    var user: User?
+}
+
+struct StreamResponse: Codable, Sendable {
+    var stream: LiveStream
+}
+
+struct MyStreamsResponse: Codable, Sendable {
+    var upcoming: [LiveStream]
+    var past: [LiveStream]
 }

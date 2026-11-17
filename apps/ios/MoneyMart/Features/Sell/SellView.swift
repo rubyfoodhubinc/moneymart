@@ -59,6 +59,8 @@ struct SellView: View {
     @State private var title = ""
     @State private var description = ""
     @State private var category = "collectibles"
+    @State private var subcategory: String?
+    @State private var showSellerSetup = false
     @State private var condition = "good"
     @State private var format: AuctionType = .liveStream
     @State private var startingPrice = ""
@@ -99,6 +101,7 @@ struct SellView: View {
     private var form: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                studioCard
                 photoStrip
                 InputField(title: "Title", text: $title, prompt: "e.g. Air Jordan 1 Chicago, 2015, DS")
                     .accessibilityIdentifier("sell-title")
@@ -141,13 +144,7 @@ struct SellView: View {
 
     private var classification: some View {
         VStack(alignment: .leading, spacing: 12) {
-            pickerBlock("Category") {
-                Picker("Category", selection: $category) {
-                    ForEach(Catalog.categories) { (item: Catalog.Category) in
-                        Label(String(localized: item.label), systemImage: item.symbol).tag(item.id)
-                    }
-                }
-            }
+            CategoryField(category: $category, subcategory: $subcategory)
             pickerBlock("Condition") {
                 Picker("Condition", selection: $condition) {
                     ForEach(Catalog.conditions) { (item: Catalog.Condition) in
@@ -289,7 +286,7 @@ struct SellView: View {
         let listing = APIClient.NewListing(
             title: title.trimmingCharacters(in: .whitespacesAndNewlines),
             description: description.trimmingCharacters(in: .whitespacesAndNewlines),
-            categoryId: category, condition: condition, auctionType: format.rawValue,
+            categoryId: category, subcategoryId: subcategory, condition: condition, auctionType: format.rawValue,
             startingPrice: price, reservePrice: number(reservePrice),
             buyItNowPrice: format == .buyNow ? price : number(buyItNow),
             durationDays: duration, images: photos)
@@ -308,5 +305,34 @@ struct SellView: View {
 
     private func reset() {
         title = ""; description = ""; startingPrice = ""; reservePrice = ""; buyItNow = ""; photos = []; duration = 7
+        subcategory = nil
+    }
+
+    /// Entry to live selling: set up once, then manage shows.
+    @ViewBuilder
+    private var studioCard: some View {
+        let ready = session.user?.sellerProfile != nil
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 20, weight: .semibold)).foregroundStyle(MM.Color.gold)
+                Text("Seller Studio").font(MM.Font.display(18)).foregroundStyle(MM.Color.ink)
+                Spacer()
+                if ready { Pill(text: "Ready to sell", systemImage: "checkmark.seal.fill", tint: MM.Color.green) }
+            }
+            Text(ready ? "Schedule live shows and line up the items you’ll sell on air." : "Set up your shop once to host live shows. It takes about two minutes.")
+                .font(MM.Font.body(14)).foregroundStyle(MM.Color.ink2)
+            if ready {
+                NavigationLink { MyShowsView() } label: { Label("My shows", systemImage: "calendar") }
+                    .buttonStyle(.goldCompact)
+                    .accessibilityIdentifier("studio-shows")
+            } else {
+                Button { showSellerSetup = true } label: { Label("Set up selling", systemImage: "sparkles") }
+                    .buttonStyle(.goldCompact)
+                    .accessibilityIdentifier("studio-setup")
+            }
+        }
+        .padding(14)
+        .mmCard()
+        .fullScreenCover(isPresented: $showSellerSetup) { SellerOnboardingView() }
     }
 }

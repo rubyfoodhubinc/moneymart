@@ -17,6 +17,9 @@ import { Server as SocketServer } from 'socket.io';
 import type {
   AuctionWithRelations,
   ClientToServerEvents,
+  PostalAddress,
+  SellerProfile,
+  Stream,
   Item,
   Order,
   PublicProfile,
@@ -25,7 +28,7 @@ import type {
   User,
 } from '@moneymart/types';
 import { DEFAULT_USER_PREFERENCES, type UserPreferences } from '@moneymart/types';
-import { categories } from '@moneymart/tokens';
+import { categories, categoryTree, isCategory, isSubcategoryOf } from '@moneymart/tokens';
 import { ANTI_SNIPE, ITEM_TIMER, categoryLabel } from './lib/labels.js';
 import { engine, type EngineEvent } from './engine/auctionEngine.js';
 import { money } from './engine/money.js';
@@ -42,6 +45,7 @@ import { resolveStreamPlayback } from './engine/playback.js';
 import { validateImage, validateImages, MAX_IMAGES } from './lib/images.js';
 import {
   auctions,
+  categoryRequests,
   chat,
   items,
   notifications,
@@ -859,11 +863,17 @@ app.get('/api/users/:handle', (req, res) => {
 /* ── REST: auctions & search ───────────────────────────────────────────── */
 
 app.get('/api/auctions', (req, res) => {
-  const { type, category, status, q, sort, limit } = req.query as Record<string, string | undefined>;
+  const { type, category, subcategory, seller, status, q, sort, limit } = req.query as Record<string, string | undefined>;
   let list = auctions.all().map((a) => expandAuction(a.id)).filter((a): a is AuctionWithRelations => Boolean(a));
 
   if (type) list = list.filter((a) => a.auctionType === type);
   if (category) list = list.filter((a) => a.item.categoryId === category);
+  if (subcategory) list = list.filter((a) => a.item.subcategoryId === subcategory);
+  if (seller) {
+    // `me` is the caller's own shop: the seller picks show items from it.
+    const sellerId = seller === 'me' ? actorId(req) : (users.findByHandle(seller)?.id ?? seller);
+    list = list.filter((a) => a.sellerId === sellerId);
+  }
   if (status === 'live') list = list.filter((a) => a.isLive);
   if (status === 'scheduled') list = list.filter((a) => a.status === 'scheduled');
   if (status === 'sold') list = list.filter((a) => a.status === 'sold');
@@ -1017,10 +1027,25 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     durationDays: number;
     sellerId?: string;
     images?: string[];
+    subcategoryId?: string;
   };
 
   if (!body.title || !body.startingPrice) {
     res.status(400).json({ error: 'title_and_starting_price_required' });
+    return;
+  }
+
+  /**
+   * The category must be one the taxonomy knows. An unknown id used to be stored
+   * verbatim and the listing then matched no category page, so it was invisible
+   * to every buyer browsing by category.
+   */
+  if (body.categoryId !== undefined && !isCategory(body.categoryId)) {
+    res.status(400).json({ error: 'unknown_category', detail: 'Pick a category from the list, or request a new one.' });
+    return;
+  }
+  if (body.subcategoryId !== undefined && !isSubcategoryOf(body.subcategoryId, body.categoryId ?? 'collectibles')) {
+    res.status(400).json({ error: 'unknown_subcategory', detail: 'That subcategory does not belong to the chosen category.' });
     return;
   }
 
@@ -1051,6 +1076,7 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     title: body.title,
     description: body.description ?? '',
     categoryId: body.categoryId ?? 'collectibles',
+    subcategoryId: body.subcategoryId,
     condition: body.condition ?? 'good',
     images: imageCheck.values,
     authenticityStatus: 'pending',
@@ -1084,7 +1110,308 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
   res.status(201).json({ auction: expanded, item });
 });
 
+/* ── REST: categories ──────────────────────────────────────────────────── */
+
+/**
+ * The full taxonomy with live activity counts, so a picker can sort by
+ * popularity and a browse page can show where buyers are right now.
+ */
+app.get('/api/categories', (_req, res) => {
+  const liveViewers = new Map<string, number>();
+  const liveShows = new Map<string, number>();
+  for (const stream of streams.live()) {
+    liveViewers.set(stream.category, (liveViewers.get(stream.category) ?? 0) + stream.viewerCount);
+    liveShows.set(stream.category, (liveShows.get(stream.category) ?? 0) + 1);
+  }
+  const listingCounts = new Map<string, number>();
+  for (const auction of auctions.all()) {
+    if (!auctions.isLive(auction)) continue;
+    const item = items.get(auction.itemId);
+    if (!item) continue;
+    listingCounts.set(item.categoryId, (listingCounts.get(item.categoryId) ?? 0) + 1);
+    if (item.subcategoryId) listingCounts.set(item.subcategoryId, (listingCounts.get(item.subcategoryId) ?? 0) + 1);
+  }
+  res.json({
+    items: categoryTree.map((entry, order) => ({
+      ...entry,
+      order,
+      liveViewers: liveViewers.get(entry.id) ?? 0,
+      liveShows: liveShows.get(entry.id) ?? 0,
+      listings: listingCounts.get(entry.id) ?? 0,
+      subcategories: entry.subcategories.map((child) => ({ ...child, listings: listingCounts.get(child.id) ?? 0 })),
+    })),
+  });
+});
+
+/** A seller asks for a category the taxonomy lacks. Signed-in callers only. */
+app.post('/api/categories/requests', (req, res) => {
+  const userId = actorId(req);
+  if (!users.get(userId)) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const name = String(body.name ?? '').trim();
+  if (name.length < 2 || name.length > 60) {
+    res.status(400).json({ error: 'invalid_name', detail: 'A category name is 2–60 characters.' });
+    return;
+  }
+  const parentId = body.parentId === undefined || body.parentId === '' ? undefined : String(body.parentId);
+  if (parentId && !isCategory(parentId)) {
+    res.status(400).json({ error: 'unknown_category', detail: 'The parent category does not exist.' });
+    return;
+  }
+  // Bounded per user so the queue cannot be flooded.
+  if (categoryRequests.byUser(userId).length >= 20) {
+    res.status(429).json({ error: 'too_many_requests', detail: 'You have reached the limit of open category requests.' });
+    return;
+  }
+  const request = categoryRequests.create({
+    id: store.nextId('catreq'),
+    userId,
+    name,
+    parentId,
+    note: body.note === undefined ? undefined : String(body.note).trim().slice(0, 280),
+    createdAt: store.iso(),
+  });
+  res.status(201).json({ request });
+});
+
 /* ── REST: streams ─────────────────────────────────────────────────────── */
+
+/**
+ * Load a show the caller hosts.
+ *
+ * Starting an item and ending a show were open to any caller, so anyone could
+ * take over or shut down another seller's broadcast. Only the host may control a
+ * show. A non-host gets 404, like a missing show, so ids are not confirmed.
+ */
+function requireHost(req: Request, res: Response, streamId: string): Stream | null {
+  const stream = streams.get(streamId);
+  const actor = actorId(req);
+  if (!stream || !actor || stream.creatorId !== actor) {
+    res.status(404).json({ error: 'stream_not_found' });
+    return null;
+  }
+  return stream;
+}
+
+const SHOW_FORMATS = ['auction', 'buy_now', 'mixed'] as const;
+const SHOW_TITLE_MAX = 150;
+
+/**
+ * Validate the editable fields of a show. Returns an error message, or null
+ * after writing the accepted values onto `target`.
+ */
+function applyShowFields(body: Record<string, unknown>, target: Partial<Stream>, creating: boolean): string | null {
+  if (creating || body.title !== undefined) {
+    const title = String(body.title ?? '').trim();
+    if (title.length < 3 || title.length > SHOW_TITLE_MAX) return `A show title is 3–${SHOW_TITLE_MAX} characters.`;
+    target.title = title;
+  }
+  if (creating || body.categoryId !== undefined) {
+    if (!isCategory(body.categoryId)) return 'Pick a category from the list.';
+    target.category = body.categoryId;
+  }
+  if (body.subcategoryId !== undefined) {
+    const parent = target.category ?? '';
+    if (body.subcategoryId === null || body.subcategoryId === '') target.subcategory = undefined;
+    else if (!isSubcategoryOf(body.subcategoryId, parent)) return 'That subcategory does not belong to the chosen category.';
+    else target.subcategory = String(body.subcategoryId);
+  }
+  if (creating || body.scheduledStartTime !== undefined) {
+    const when = Date.parse(String(body.scheduledStartTime ?? ''));
+    if (!Number.isFinite(when)) return 'A show needs a valid start time.';
+    // A little slack for clock drift; a year ahead is the scheduling horizon.
+    if (when < Date.now() - 5 * 60_000) return 'A show cannot start in the past.';
+    if (when > Date.now() + 366 * 86_400_000) return 'A show can be scheduled up to a year ahead.';
+    target.scheduledStartTime = new Date(when).toISOString();
+  }
+  if (body.description !== undefined) target.description = String(body.description).trim().slice(0, 1000);
+  if (body.format !== undefined) {
+    if (!SHOW_FORMATS.includes(body.format as (typeof SHOW_FORMATS)[number])) return 'Format must be auction, buy_now or mixed.';
+    target.format = body.format as Stream['format'];
+  }
+  if (body.visibility !== undefined) {
+    if (body.visibility !== 'public' && body.visibility !== 'private') return 'Visibility must be public or private.';
+    target.visibility = body.visibility;
+  }
+  if (body.language !== undefined) {
+    const value = String(body.language).trim();
+    if (!LANGUAGE_TAG.test(value)) return 'A language must be a tag such as `en` or `es`.';
+    target.language = value;
+  }
+  if (body.posterUrl !== undefined) {
+    if (body.posterUrl === null || body.posterUrl === '') target.posterUrl = '';
+    else {
+      const checked = validateImage(body.posterUrl);
+      if (!checked.ok) return `Thumbnail: ${checked.reason}`;
+      target.posterUrl = checked.value;
+    }
+  }
+  return null;
+}
+
+/**
+ * Create (schedule) a show. The caller becomes the host. A seller must finish
+ * seller onboarding first: the return address is what shipping is quoted from,
+ * so a show without one could not sell anything.
+ */
+app.post('/api/streams', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  if (!user.sellerProfile) {
+    res.status(403).json({ error: 'seller_profile_required', detail: 'Finish seller setup (including your return address) before scheduling a show.' });
+    return;
+  }
+  const upcoming = streams.byCreator(userId).filter((s) => s.status !== 'ended');
+  if (upcoming.length >= 50) {
+    res.status(429).json({ error: 'too_many_shows', detail: 'You can have up to 50 upcoming shows.' });
+    return;
+  }
+  const draft: Partial<Stream> = {};
+  const problem = applyShowFields((req.body ?? {}) as Record<string, unknown>, draft, true);
+  if (problem) {
+    res.status(400).json({ error: 'invalid_show', detail: problem });
+    return;
+  }
+  const stream: Stream = {
+    id: store.nextId('str'),
+    creatorId: userId,
+    title: draft.title!,
+    category: draft.category!,
+    subcategory: draft.subcategory,
+    description: draft.description,
+    format: draft.format ?? 'auction',
+    visibility: draft.visibility ?? 'public',
+    language: draft.language ?? preferencesFor(user).language,
+    createdAt: store.iso(),
+    scheduledStartTime: draft.scheduledStartTime!,
+    status: 'scheduled',
+    viewerCount: 0,
+    peakViewerCount: 0,
+    // No broadcast yet: playback resolves to "offline" until the host goes live.
+    hlsUrl: '',
+    posterUrl: draft.posterUrl ?? '',
+    itemQueue: [],
+    totalGMV: 0,
+    chatEnabled: true,
+  };
+  streams.create(stream);
+  res.status(201).json({ stream: expandStream(stream.id) });
+});
+
+/** Edit a show that has not started. */
+app.patch('/api/streams/:id', (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.status !== 'scheduled') {
+    res.status(409).json({ error: 'show_not_editable', detail: 'Only a show that has not started can be edited.' });
+    return;
+  }
+  const draft: Partial<Stream> = { category: stream.category };
+  const problem = applyShowFields((req.body ?? {}) as Record<string, unknown>, draft, false);
+  if (problem) {
+    res.status(400).json({ error: 'invalid_show', detail: problem });
+    return;
+  }
+  // A category change drops a subcategory that no longer belongs to it.
+  if (draft.category !== stream.category && draft.subcategory === undefined) stream.subcategory = undefined;
+  Object.assign(stream, draft);
+  streams.save(stream);
+  res.json({ stream: expandStream(stream.id) });
+});
+
+/** Cancel a show that has not started. */
+app.delete('/api/streams/:id', (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.status !== 'scheduled') {
+    res.status(409).json({ error: 'show_not_cancellable', detail: 'A show that has started is ended, not cancelled.' });
+    return;
+  }
+  stream.status = 'ended';
+  stream.endTime = store.iso();
+  stream.itemQueue = [];
+  streams.save(stream);
+  res.json({ ok: true, stream: expandStream(stream.id) });
+});
+
+/** The caller's own shows, upcoming first, then past. */
+app.get('/api/me/streams', (req, res) => {
+  const userId = actorId(req);
+  if (!users.get(userId)) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  const mine = streams.byCreator(userId).map((s) => expandStream(s.id)!).filter(Boolean);
+  const upcoming = mine.filter((s) => s.status !== 'ended').sort((a, b) => Date.parse(a.scheduledStartTime) - Date.parse(b.scheduledStartTime));
+  const past = mine.filter((s) => s.status === 'ended').sort((a, b) => Date.parse(b.endTime ?? b.scheduledStartTime) - Date.parse(a.endTime ?? a.scheduledStartTime));
+  res.json({ upcoming, past });
+});
+
+/**
+ * Put one of the host's own listings into the show's run order. A listing can be
+ * queued in one open show at a time, so a sale cannot happen twice.
+ */
+app.post('/api/streams/:id/items', (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.status === 'ended') {
+    res.status(409).json({ error: 'show_ended' });
+    return;
+  }
+  const auctionId = String((req.body ?? {}).auctionId ?? '');
+  const auction = auctions.get(auctionId);
+  if (!auction || auction.sellerId !== stream.creatorId) {
+    res.status(404).json({ error: 'listing_not_found', detail: 'Only your own listings can be added to your show.' });
+    return;
+  }
+  if (auction.status === 'sold' || auction.status === 'ended' || auction.status === 'cancelled') {
+    res.status(409).json({ error: 'listing_closed', detail: 'That listing has already closed.' });
+    return;
+  }
+  if (stream.itemQueue.includes(auction.id)) {
+    res.json({ ok: true, stream: expandStream(stream.id) });
+    return;
+  }
+  const elsewhere = streams.byCreator(stream.creatorId).find((s) => s.id !== stream.id && s.status !== 'ended' && s.itemQueue.includes(auction.id));
+  if (elsewhere) {
+    res.status(409).json({ error: 'listing_in_other_show', detail: `That listing is already in "${elsewhere.title}".` });
+    return;
+  }
+  if (stream.itemQueue.length >= 500) {
+    res.status(409).json({ error: 'queue_full', detail: 'A show can hold up to 500 items.' });
+    return;
+  }
+  stream.itemQueue.push(auction.id);
+  auction.streamId = stream.id;
+  auctions.save(auction);
+  streams.save(stream);
+  res.status(201).json({ ok: true, stream: expandStream(stream.id) });
+});
+
+/** Take a listing out of the run order (not while it is the item on screen). */
+app.delete('/api/streams/:id/items/:auctionId', (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.activeAuctionId === req.params.auctionId && stream.status === 'live') {
+    res.status(409).json({ error: 'item_on_screen', detail: 'That item is running now.' });
+    return;
+  }
+  stream.itemQueue = stream.itemQueue.filter((id) => id !== req.params.auctionId);
+  const auction = auctions.get(req.params.auctionId);
+  if (auction && auction.streamId === stream.id) {
+    auction.streamId = undefined;
+    auctions.save(auction);
+  }
+  streams.save(stream);
+  res.json({ ok: true, stream: expandStream(stream.id) });
+});
 
 app.get('/api/streams', (req, res) => {
   const { status } = req.query as { status?: string };
@@ -1110,9 +1437,11 @@ app.get('/api/streams/:id', (req, res) => {
 });
 
 app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
-  const stream = streams.get(req.params.id);
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
   const auction = auctions.get(req.params.auctionId);
-  if (!stream || !auction) {
+  // Only an item from this show's own run order can be put on screen.
+  if (!auction || !stream.itemQueue.includes(auction.id) || auction.sellerId !== stream.creatorId) {
     res.status(404).json({ error: 'not_found' });
     return;
   }
@@ -1133,11 +1462,8 @@ app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
 });
 
 app.post('/api/streams/:id/end', (req, res) => {
-  const stream = streams.get(req.params.id);
-  if (!stream) {
-    res.status(404).json({ error: 'stream_not_found' });
-    return;
-  }
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
   stream.status = 'ended';
   stream.endTime = store.iso();
   stream.activeAuctionId = undefined;
@@ -2267,6 +2593,119 @@ app.patch('/api/me', (req, res) => {
     profile: publicProfile(user.id),
     preferences: preferencesFor(user),
   });
+});
+
+/* ── Seller onboarding ─────────────────────────────────────────────────── */
+
+const SELLER_BUSINESS_TYPES = ['reseller', 'liquidator', 'brand', 'retailer', 'consignment', 'other'] as const;
+const SELLER_CHANNELS = ['website', 'social', 'store', 'marketplaces', 'none'] as const;
+const SOCIAL_NETWORKS = ['instagram', 'tiktok', 'youtube', 'twitch', 'x', 'facebook', 'other'] as const;
+const BAND = /^[a-z0-9_+-]{1,24}$/;
+
+function readAddress(raw: unknown): PostalAddress | string {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'A return address is required.';
+  const a = raw as Record<string, unknown>;
+  const text = (key: string, min: number, max: number) => {
+    const value = String(a[key] ?? '').trim();
+    return value.length >= min && value.length <= max ? value : null;
+  };
+  const fullName = text('fullName', 2, 80);
+  const line1 = text('line1', 3, 120);
+  const city = text('city', 2, 80);
+  const region = text('region', 1, 80);
+  const postalCode = text('postalCode', 2, 16);
+  const countryCode = String(a.countryCode ?? '').trim().toUpperCase();
+  if (!fullName) return 'Enter your legal name as it appears on your ID.';
+  if (!line1) return 'Enter the street address.';
+  if (/\b(p\.?\s*o\.?\s*box|post office box)\b/i.test(line1)) return 'A return address cannot be a PO box.';
+  if (!city) return 'Enter the city.';
+  if (!region) return 'Enter the state, province or region.';
+  if (!postalCode) return 'Enter the postal code.';
+  if (!/^[A-Z]{2}$/.test(countryCode)) return 'A country must be a two-letter ISO code.';
+  const line2 = a.line2 === undefined ? undefined : String(a.line2).trim().slice(0, 120) || undefined;
+  return { fullName, line1, line2, city, region, postalCode, countryCode };
+}
+
+/**
+ * Save seller onboarding. Becoming a seller is self-service; this records who the
+ * seller is and where they ship from. The address is private to the account.
+ */
+app.put('/api/me/seller-profile', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const fail = (detail: string) => res.status(400).json({ error: 'invalid_seller_profile', detail });
+
+  if (body.entity !== 'individual' && body.entity !== 'business') return void fail('Choose individual or registered business.');
+  let businessType: SellerProfile['businessType'];
+  if (body.businessType !== undefined && body.businessType !== null && body.businessType !== '') {
+    if (!SELLER_BUSINESS_TYPES.includes(body.businessType as (typeof SELLER_BUSINESS_TYPES)[number])) return void fail('Unknown business type.');
+    businessType = body.businessType as SellerProfile['businessType'];
+  }
+  if (body.entity === 'business' && !businessType) return void fail('Choose what best describes your business.');
+  if (!isCategory(body.mainCategory)) return void fail('Choose the category you will sell in most.');
+  const mainCategory = body.mainCategory;
+  const subs = Array.isArray(body.subcategories) ? body.subcategories.map(String) : [];
+  if (subs.some((id) => !isSubcategoryOf(id, mainCategory))) return void fail('A subcategory does not belong to your main category.');
+  const channels = Array.isArray(body.channels) ? body.channels.map(String) : [];
+  if (channels.some((c) => !SELLER_CHANNELS.includes(c as (typeof SELLER_CHANNELS)[number]))) return void fail('Unknown sales channel.');
+  const socials: Record<string, string> = {};
+  if (body.socials !== undefined) {
+    if (typeof body.socials !== 'object' || body.socials === null || Array.isArray(body.socials)) return void fail('socials must be an object.');
+    for (const [network, handle] of Object.entries(body.socials as Record<string, unknown>)) {
+      if (!SOCIAL_NETWORKS.includes(network as (typeof SOCIAL_NETWORKS)[number])) return void fail(`Unknown social network: ${network}`);
+      const value = String(handle ?? '').trim().replace(/^@/, '');
+      if (!value) continue;
+      if (!/^[A-Za-z0-9._-]{1,40}$/.test(value)) return void fail(`That ${network} username does not look right.`);
+      socials[network] = value;
+    }
+  }
+  const band = (key: string): string | undefined | false => {
+    const value = body[key];
+    if (value === undefined || value === null || value === '') return undefined;
+    return BAND.test(String(value)) ? String(value) : false;
+  };
+  const monthlyRevenue = band('monthlyRevenue');
+  const inventorySize = band('inventorySize');
+  const teamSize = band('teamSize');
+  const weeklyLiveHours = band('weeklyLiveHours');
+  if ([monthlyRevenue, inventorySize, teamSize, weeklyLiveHours].includes(false)) return void fail('An answer was not one of the offered options.');
+  const address = readAddress(body.returnAddress);
+  if (typeof address === 'string') return void fail(address);
+
+  const now = store.iso();
+  const profile: SellerProfile = {
+    entity: body.entity,
+    businessType,
+    mainCategory,
+    subcategories: [...new Set(subs)].slice(0, 12),
+    channels: [...new Set(channels)],
+    socials,
+    monthlyRevenue: monthlyRevenue || undefined,
+    inventorySize: inventorySize || undefined,
+    teamSize: teamSize || undefined,
+    weeklyLiveHours: weeklyLiveHours || undefined,
+    returnAddress: address,
+    completedAt: user.sellerProfile?.completedAt ?? now,
+    updatedAt: now,
+  };
+  user.sellerProfile = profile;
+  if (user.role === 'buyer') user.role = 'seller';
+  users.upsert(user);
+  res.json({ ok: true, sellerProfile: profile, user });
+});
+
+app.get('/api/me/seller-profile', (req, res) => {
+  const user = users.get(actorId(req));
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  res.json({ sellerProfile: user.sellerProfile ?? null });
 });
 
 /** The caller's own account, including preferences the public profile omits. */

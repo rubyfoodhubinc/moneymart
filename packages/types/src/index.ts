@@ -38,6 +38,11 @@ export interface User {
    * because that is the only place a preference can survive a restart.
    */
   preferences?: UserPreferences;
+  /**
+   * Seller onboarding answers and the return address shipping is quoted from.
+   * Private to the account owner: never part of the public profile.
+   */
+  sellerProfile?: SellerProfile;
   createdAt: ISODate;
   lastLoginAt?: ISODate;
 }
@@ -62,6 +67,46 @@ export interface UserPreferences {
    * which is the same defect as a toggle that does not save.
    */
   interests?: string[];
+}
+
+export type SellerEntity = 'individual' | 'business';
+export type SellerBusinessType = 'reseller' | 'liquidator' | 'brand' | 'retailer' | 'consignment' | 'other';
+
+export interface PostalAddress {
+  fullName: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  region: string;
+  postalCode: string;
+  countryCode: string;
+}
+
+/** Seller onboarding answers (bands are stored as the option id the client showed). */
+export interface SellerProfile {
+  entity: SellerEntity;
+  businessType?: SellerBusinessType;
+  mainCategory: string;
+  subcategories: string[];
+  channels: string[];
+  socials: Record<string, string>;
+  monthlyRevenue?: string;
+  inventorySize?: string;
+  teamSize?: string;
+  weeklyLiveHours?: string;
+  returnAddress: PostalAddress;
+  completedAt: ISODate;
+  updatedAt: ISODate;
+}
+
+/** A seller's request for a category the taxonomy does not have yet. */
+export interface CategoryRequest {
+  id: string;
+  userId: string;
+  name: string;
+  parentId?: string;
+  note?: string;
+  createdAt: ISODate;
 }
 
 /** Resolved preferences, with the documented defaults filled in. */
@@ -164,11 +209,21 @@ export interface StreamPlayback {
   updatedAt: ISODate;
 }
 
+export type ShowFormat = 'auction' | 'buy_now' | 'mixed';
+export type ShowVisibility = 'public' | 'private';
+
 export interface Stream {
   id: string;
   creatorId: string;
   title: string;
   category: string;
+  subcategory?: string;
+  description?: string;
+  format?: ShowFormat;
+  visibility?: ShowVisibility;
+  /** BCP-47 tag of the language the host will speak. */
+  language?: string;
+  createdAt?: ISODate;
   scheduledStartTime: ISODate;
   actualStartTime?: ISODate;
   endTime?: ISODate;

@@ -61,6 +61,11 @@ const SUITES = [
     detail: 'changes persist, invalid input refused, export is real and scoped',
   },
   {
+    name: 'Categories, sellers & shows',
+    script: 'verify-shows.mjs',
+    detail: 'full taxonomy, seller onboarding, host-only show control, one open show per listing',
+  },
+  {
     name: 'Concurrency across auctions',
     script: 'verify-concurrency.mjs',
     detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',

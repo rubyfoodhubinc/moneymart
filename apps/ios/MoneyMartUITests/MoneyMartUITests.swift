@@ -114,6 +114,119 @@ final class MoneyMartUITests: XCTestCase {
         XCTAssertEqual(published.label, "QA Vintage Walkman WM-2")
     }
 
+    /// Seller journey: finish seller setup, list an item, schedule a show and put
+    /// the item in its run order. Local gateway only (same rules as above).
+    func testSellerSetupScheduleShowAndAddItem() async throws {
+        try await prepareLocalGateway()
+        app.buttons["welcome-skip"].tap()
+        try signIn("qa.seller@moneymart.test")
+
+        // List an item first, so there is something to put in the show.
+        app.tabBars.buttons["Sell"].tap()
+        let title = app.textFields["sell-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        title.tap()
+        title.typeText("QA Candy Crate\n")
+        app.buttons["Buy now"].tap()
+        let amount = app.textFields["sell-price"]
+        scrollTo(amount)
+        amount.tap()
+        amount.typeText("25")
+        let done = app.toolbars.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 3) { done.tap() }
+        let publish = app.buttons["sell-publish"]
+        scrollTo(publish)
+        publish.tap()
+        XCTAssertTrue(app.staticTexts["lot-title"].waitForExistence(timeout: 15), "the listing is published")
+
+        // Seller setup from the Studio card.
+        app.tabBars.buttons["Sell"].tap()
+        if app.navigationBars.buttons.firstMatch.exists, !app.buttons["studio-setup"].exists { app.navigationBars.buttons.firstMatch.tap() }
+        let setup = app.buttons["studio-setup"]
+        scrollTo(setup, up: true)
+        XCTAssertTrue(setup.waitForExistence(timeout: 10), "a new seller is offered setup")
+        setup.tap()
+        let next = app.buttons["seller-next"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        next.tap() // welcome
+        app.buttons["seller-option-individual"].tap(); next.tap()
+        let food = app.buttons["seller-category-food"]
+        scrollTo(food)
+        food.tap(); next.tap()
+        next.tap() // subcategories optional
+        app.buttons["seller-option-none"].tap(); next.tap()
+        app.buttons["seller-option-lt_1k"].tap(); next.tap()
+        app.buttons["seller-option-lt_10"].tap(); next.tap()
+        app.buttons["seller-option-1"].tap(); next.tap()
+        app.buttons["seller-option-1_2"].tap(); next.tap()
+        fill("addr-line1", "12 Market Street")
+        fill("addr-city", "Houston")
+        fill("addr-region", "TX")
+        fill("addr-postal", "77002")
+        if done.waitForExistence(timeout: 2) { done.tap() }
+        scrollTo(next)
+        XCTAssertTrue(next.isEnabled, "a complete address can be submitted")
+        next.tap()
+
+        // The Studio card now offers shows; schedule one.
+        let shows = app.buttons["studio-shows"]
+        XCTAssertTrue(shows.waitForExistence(timeout: 15), "finishing setup unlocks My shows")
+        shows.tap()
+        let newShow = app.buttons["shows-new"]
+        XCTAssertTrue(newShow.waitForExistence(timeout: 10))
+        newShow.tap()
+        let showTitle = app.textFields["show-title"]
+        XCTAssertTrue(showTitle.waitForExistence(timeout: 5))
+        showTitle.tap()
+        showTitle.typeText("QA Candy Night\n")
+        app.buttons["show-save"].tap()
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'show-str_'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "the scheduled show is listed")
+        XCTAssertTrue(row.label.contains("QA Candy Night"), row.label)
+        row.tap()
+
+        // Add the listing to the run order.
+        let addItems = app.buttons["show-add-items"]
+        XCTAssertTrue(addItems.waitForExistence(timeout: 10))
+        addItems.tap()
+        let add = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'add-auc_'")).firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "the seller's open listing is offered")
+        add.tap()
+        app.navigationBars.buttons["Done"].tap()
+        XCTAssertTrue(app.staticTexts["QA Candy Crate"].waitForExistence(timeout: 10), "the item is in the run order")
+    }
+
+    private func signIn(_ identifier: String) throws {
+        app.tabBars.buttons["Profile"].tap()
+        app.buttons["profile-signin"].tap()
+        let field = app.textFields["auth-identifier"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText(identifier)
+        app.buttons["auth-send"].tap()
+        let devCode = app.buttons["auth-devcode"]
+        guard devCode.waitForExistence(timeout: 10) else {
+            throw XCTSkip("Gateway does not expose development codes; run against a local API.")
+        }
+        devCode.tap()
+        XCTAssertTrue(app.buttons["profile-signout"].waitForExistence(timeout: 15), "verifying the code signs the user in")
+    }
+
+    private func scrollTo(_ target: XCUIElement, up: Bool = false) {
+        var attempts = 0
+        while !(target.exists && target.isHittable) && attempts < 6 {
+            if up { app.swipeDown() } else { app.swipeUp() }
+            attempts += 1
+        }
+    }
+
+    private func fill(_ identifier: String, _ text: String) {
+        let field = app.textFields[identifier]
+        scrollTo(field)
+        field.tap()
+        field.typeText(text)
+    }
+
     /// Reseeds the local gateway and keeps the test lot open, so the journey is
     /// repeatable (a second run would otherwise already hold the high bid).
     private func prepareLocalGateway() async throws {
