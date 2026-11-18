@@ -19,6 +19,9 @@ struct APIError: LocalizedError, Sendable, Equatable {
         case "invalid_images": return String(localized: "One of the photos could not be accepted.")
         case "title_and_starting_price_required": return String(localized: "A title and starting price are required.")
         case "seller_profile_required": return String(localized: "Finish seller setup before scheduling a show.")
+        case "verification_required": return String(localized: "Verify your identity (Profile › Verification) before scheduling a show.")
+        case "verification_unavailable": return String(localized: "Identity checks aren't switched on yet.")
+        case "already_verified": return String(localized: "Your account is already verified.")
         case "listing_in_other_show": return String(localized: "That item is already in another show.")
         case "live_video_unavailable": return String(localized: "Live video is unavailable right now. Try again, or switch to the backup.")
         case "not_live": return String(localized: "This show is not broadcasting right now.")
@@ -295,6 +298,27 @@ extension APIClient {
 
     func notifications() async throws -> NotificationsResponse { try await get("/api/notifications") }
     func markAllRead() async throws -> OkResponse { try await post("/api/notifications/read", body: EmptyBody()) }
+    func markRead(_ id: String) async throws -> OkResponse {
+        struct B: Encodable, Sendable { let id: String }
+        return try await post("/api/notifications/read", body: B(id: id))
+    }
+
+    // MARK: Push
+
+    func registerDevice(token: String, env: String) async throws -> OkResponse {
+        struct B: Encodable, Sendable { let token: String; let env: String }
+        return try await post("/api/devices", body: B(token: token, env: env))
+    }
+    func unregisterDevice(token: String) async throws -> OkResponse { try await delete("/api/devices/\(token)") }
+
+    // MARK: Identity checks (Didit)
+
+    func verification() async throws -> VerificationInfo { try await get("/api/verification") }
+    func startVerification(kind: String) async throws -> VerificationStart {
+        struct B: Encodable, Sendable { let kind: String }
+        return try await post("/api/verification/start", body: B(kind: kind))
+    }
+    func refreshVerification() async throws -> VerificationInfo { try await post("/api/verification/refresh") }
 
     func orders() async throws -> OrdersResponse { try await get("/api/orders") }
     func wallet() async throws -> WalletResponse { try await get("/api/wallet") }

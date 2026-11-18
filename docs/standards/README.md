@@ -1,4 +1,4 @@
-# AI Company Standard (v1.2)
+# AI Company Standard (v1.3)
 
 A reusable standard for running an app with an **AI President**, an **Owner console**, and a **local AI on every member's device**. Any of our apps can adopt it, and any app can be updated against it.
 
@@ -22,6 +22,7 @@ MoneyMart is the reference implementation (`services/api/src/ai/`). The standard
 | 5 | [Local AI](05-local-ai.md) | The member's assistant, reporting up, directives down, privacy |
 | 6 | [API contract](06-api-contract.md) | Routes, request and response shapes |
 | 7 | [Conformance tests](07-conformance.md) | The checks an implementation must pass |
+| 8 | [Verification and notifications](08-verification-and-notifications.md) | Identity checks, one delivery path, iPhone push, Owner messages |
 | — | [Adoption checklist](ADOPTING.md) | Step by step for a new or existing app |
 | — | [Changelog](CHANGELOG.md) | Versions of this standard |
 

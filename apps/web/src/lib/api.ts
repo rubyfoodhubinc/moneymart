@@ -246,6 +246,11 @@ export interface BoardMeeting {
   id: string; kind: 'board' | 'room'; topic: string; seats: string[]; lines: BoardLine[]; status: 'open' | 'closed';
   speaking: string | null; createdAt: string; closedAt?: string; minutesPostId?: string; lineCount?: number;
 }
+export interface Broadcast { id: string; by: string; title: string; body: string; audience: string; kind: 'announcement' | 'marketing'; href: string; recipients: number; pushed: number; createdAt: string }
+export interface NotifyStatus { delivery: { push: boolean; devices: number; topic: string }; audiences: { id: string; count: number }[]; history: Broadcast[] }
+export interface NotifyInput { title: string; body: string; audience: string; kind: 'announcement' | 'marketing'; href?: string }
+export interface VerificationRow { userId: string; handle: string; name: string; status: string; providerStatus: string; kind: 'person' | 'business'; startedAt: string; decidedAt: string | null; reason: string | null }
+export interface VerificationsAdmin { configured: { person: boolean; business: boolean; webhook: boolean }; required: boolean; rows: VerificationRow[] }
 export interface AuditEntry { id: string; at: string; actor: string; action: string; target: string; detail: Record<string, unknown> }
 
 export const api = {
@@ -256,6 +261,11 @@ export const api = {
   adminSettings: () => request<{ settings: ConsoleSetting[] }>('/api/admin/settings'),
   saveAdminSettings: (changes: { key: string; value: unknown }[]) =>
     request<{ ok: boolean }>('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ changes }) }),
+  adminNotify: () => request<NotifyStatus>('/api/admin/notify'),
+  previewNotify: (input: NotifyInput) =>
+    request<{ ok: boolean; problem: string | null; recipients: number }>('/api/admin/notify', { method: 'POST', body: JSON.stringify({ ...input, preview: true }) }),
+  sendNotify: (input: NotifyInput) => request<{ ok: boolean; broadcast: Broadcast }>('/api/admin/notify', { method: 'POST', body: JSON.stringify(input) }),
+  adminVerifications: () => request<VerificationsAdmin>('/api/admin/verifications'),
   adminAudit: (limit = 100) => request<{ entries: AuditEntry[] }>(`/api/admin/audit?limit=${limit}`),
   president: () => request<PresidentOffice>('/api/admin/president'),
   presidentChat: (thread = 'main') => request<{ lines: PresChatLine[] }>(`/api/admin/president/chat?thread=${encodeURIComponent(thread)}`),

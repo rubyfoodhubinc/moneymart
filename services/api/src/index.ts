@@ -72,6 +72,10 @@ import {
 } from './store.js';
 import { seed, reseed } from './seed.js';
 import { mountAiRoutes, startAiCompany } from './ai/routes.js';
+import { startDelivery, deliveryStatus } from './engine/notify.js';
+import { VerificationError, handleWebhook, refreshCheck, startCheck, verifyWebhook, viewFor, webhookConfigured } from './engine/verification.js';
+import { pushDevices } from './store.js';
+import { valueOf as settingValue } from './ai/registry.js';
 
 const PORT = Number(process.env.PORT ?? 4317);
 const app = express();
@@ -271,7 +275,15 @@ app.use(cors({ origin: corsOrigin, credentials: true }));
  * ceiling is 3 MB of raw bytes, which is roughly 4 MB once base64-encoded, so a
  * full gallery needs headroom well beyond the old 2 MB.
  */
-app.use(express.json({ limit: '16mb' }));
+app.use(
+  express.json({
+    limit: '16mb',
+    // Didit signs the exact bytes it sent; keep them for that one route.
+    verify: (req, _res, buf) => {
+      if ((req as Request).url?.startsWith('/api/webhooks/didit')) (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  }),
+);
 
 /**
  * Rate limiting.
@@ -290,6 +302,11 @@ app.use('/api/webhooks', rateLimit(POLICIES.webhook));
 const io = new SocketServer<ClientToServerEvents, ServerToClientEvents>(http, {
   cors: { origin: corsOrigin, credentials: true },
   path: '/socket.io',
+});
+
+/* Every notification created anywhere reaches open apps live and, when allowed, the member's phone. */
+startDelivery((room, _event, payload) => {
+  io.to(room).emit('notification', payload as Parameters<ServerToClientEvents['notification']>[0]);
 });
 
 /**
@@ -470,15 +487,12 @@ function broadcast(events: EngineEvent[]): void {
           read: false,
           createdAt: store.iso(),
         });
-        io.to(`user:${event.userId}`).emit('notification', notification);
+        void notification; // delivered live and by push from notify.ts
         break;
       }
       case 'won': {
         io.to(`auction:${event.payload.auction.id}`).emit('auction:won', event.payload);
-        event.viewerIds.forEach((userId) => {
-          const notification = notifications.forUser(userId)[0];
-          if (notification) io.to(`user:${userId}`).emit('notification', notification);
-        });
+        // The winner's and seller's notifications are delivered by notify.ts when they are created.
         const streamId = event.payload.auction.streamId;
         if (streamId) {
           const stream = streams.get(streamId);
@@ -1531,6 +1545,10 @@ app.post('/api/streams', (req, res) => {
     res.status(403).json({ error: 'seller_profile_required', detail: 'Finish seller setup (including your return address) before scheduling a show.' });
     return;
   }
+  if (settingValue<boolean>('sellers.verification_required') && user.verificationStatus !== 'verified') {
+    res.status(403).json({ error: 'verification_required', detail: 'Verify your identity in Selling › Verification before scheduling a show.' });
+    return;
+  }
   const upcoming = streams.byCreator(userId).filter((s) => s.status !== 'ended');
   if (upcoming.length >= 50) {
     res.status(429).json({ error: 'too_many_shows', detail: 'You can have up to 50 upcoming shows.' });
@@ -1601,6 +1619,10 @@ app.post('/api/streams/batch', (req, res) => {
   }
   if (!user.sellerProfile) {
     res.status(403).json({ error: 'seller_profile_required', detail: 'Finish seller setup (including your return address) before scheduling a show.' });
+    return;
+  }
+  if (settingValue<boolean>('sellers.verification_required') && user.verificationStatus !== 'verified') {
+    res.status(403).json({ error: 'verification_required', detail: 'Verify your identity in Selling › Verification before scheduling a show.' });
     return;
   }
   const body = (req.body ?? {}) as Record<string, unknown>;
@@ -1893,7 +1915,7 @@ function notifyShowLive(stream: Stream): void {
       read: false,
       createdAt: store.iso(),
     });
-    io.to(`user:${userId}`).emit('notification', notification);
+    void notification; // delivered by notify.ts
   }
 }
 
@@ -1942,6 +1964,98 @@ app.post('/api/notifications/read', (req, res) => {
   res.json({ ok: true, items: notifications.forUser(actor) });
 });
 
+/* ── REST: push devices ─────────────────────────────────────────────────── */
+
+/** Register this phone for push. The token is tied to the signed-in member only. */
+app.post('/api/devices', (req, res) => {
+  const userId = actorId(req);
+  if (!userId || !users.get(userId)) {
+    res.status(401).json({ error: 'sign_in' });
+    return;
+  }
+  const { token, env } = (req.body ?? {}) as { token?: string; env?: string };
+  if (typeof token !== 'string' || !/^[0-9a-fA-F]{64,200}$/.test(token)) {
+    res.status(400).json({ error: 'invalid_token' });
+    return;
+  }
+  if (pushDevices.forUser(userId).length >= 10) {
+    const oldest = pushDevices.forUser(userId).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
+    if (oldest) pushDevices.remove(oldest.token);
+  }
+  pushDevices.save({ token: token.toLowerCase(), userId, platform: 'ios', env: env === 'sandbox' ? 'sandbox' : 'production', updatedAt: store.iso() });
+  res.json({ ok: true, push: deliveryStatus().push });
+});
+
+app.delete('/api/devices/:token', (req, res) => {
+  const userId = actorId(req);
+  const token = String(req.params.token).toLowerCase();
+  const mine = pushDevices.forUser(userId).some((d) => d.token === token);
+  if (mine) pushDevices.remove(token);
+  res.json({ ok: true, removed: mine });
+});
+
+/* ── REST: seller identity checks (Didit) ───────────────────────────────── */
+
+function verificationError(res: Response, error: unknown): void {
+  if (error instanceof VerificationError) {
+    res.status(error.status).json({ error: error.code, detail: error.message });
+    return;
+  }
+  res.status(502).json({ error: 'provider_error', detail: 'The verification service did not answer. Try again in a moment.' });
+}
+
+app.get('/api/verification', (req, res) => {
+  const user = users.get(actorId(req));
+  if (!user) {
+    res.status(401).json({ error: 'sign_in' });
+    return;
+  }
+  res.json(viewFor(user));
+});
+
+app.post('/api/verification/start', async (req, res) => {
+  const user = users.get(actorId(req));
+  if (!user) {
+    res.status(401).json({ error: 'sign_in' });
+    return;
+  }
+  const { kind } = (req.body ?? {}) as { kind?: string };
+  try {
+    const { url } = await startCheck(user, kind === 'business' ? 'business' : kind === 'person' ? 'person' : undefined, process.env.MM_DIDIT_CALLBACK || undefined);
+    res.json({ url, verification: viewFor(users.get(user.id)!) });
+  } catch (error) {
+    verificationError(res, error);
+  }
+});
+
+app.post('/api/verification/refresh', async (req, res) => {
+  const user = users.get(actorId(req));
+  if (!user) {
+    res.status(401).json({ error: 'sign_in' });
+    return;
+  }
+  try {
+    await refreshCheck(user);
+    res.json(viewFor(users.get(user.id)!));
+  } catch (error) {
+    verificationError(res, error);
+  }
+});
+
+/** Didit status updates. Signed; the session must be one this server opened. */
+app.post('/api/webhooks/didit', (req, res) => {
+  if (!webhookConfigured()) {
+    res.status(503).json({ error: 'webhook_not_configured' });
+    return;
+  }
+  const raw = (req as Request & { rawBody?: Buffer }).rawBody;
+  if (!verifyWebhook(req.headers, raw, req.body)) {
+    res.status(401).json({ error: 'bad_signature' });
+    return;
+  }
+  res.json({ ok: true, ...handleWebhook((req.body ?? {}) as Record<string, unknown>) });
+});
+
 app.get('/api/orders', (req, res) => {
   const userId = actorId(req, req.query.userId as string | undefined);
   const withAuctions = (list: ReturnType<typeof orders.buying>) =>
@@ -1985,10 +2099,27 @@ app.post('/api/orders/:id/status', (req, res) => {
     trackingNumber?: string;
     courierName?: string;
   };
+  const before = order.orderStatus;
   if (orderStatus) order.orderStatus = orderStatus;
   if (trackingNumber) order.trackingNumber = trackingNumber;
   if (courierName) order.courierName = courierName;
   orders.save(order);
+  if (order.orderStatus !== before && (order.orderStatus === 'shipped' || order.orderStatus === 'delivered')) {
+    const title = auctionTitleFor(order.auctionId);
+    const tracking = order.trackingNumber ? ` ${order.courierName ? `${order.courierName} ` : ''}tracking ${order.trackingNumber}.` : '';
+    notifications.create({
+      id: store.nextId('ntf'),
+      userId: order.buyerId,
+      category: 'orders',
+      title: order.orderStatus === 'shipped' ? 'Your order shipped' : 'Your order was delivered',
+      body: order.orderStatus === 'shipped'
+        ? `${title} is on its way.${tracking}`
+        : `${title} arrived. Check it, then confirm receipt to release payment to the seller.`,
+      href: `/orders/${order.id}`,
+      read: false,
+      createdAt: store.iso(),
+    });
+  }
   res.json({ ok: true, order });
 });
 
@@ -2382,7 +2513,7 @@ app.post('/api/orders/:id/pay', async (req, res) => {
       orders.save({ ...order, paymentStatus: 'failed' });
     }
     broadcast([]);
-    io.to(`user:${order.buyerId}`).emit('notification', notifications.create({
+    notifications.create({
       id: store.nextId('ntf'),
       userId: order.buyerId,
       category: 'orders',
@@ -2393,7 +2524,19 @@ app.post('/api/orders/:id/pay', async (req, res) => {
       href: `/orders/${order.id}`,
       read: false,
       createdAt: store.iso(),
-    }));
+    });
+    if (result.escrow.state === 'in_escrow') {
+      notifications.create({
+        id: store.nextId('ntf'),
+        userId: order.sellerId,
+        category: 'orders',
+        title: 'Paid — ready to ship',
+        body: `${auctionTitleFor(order.auctionId)} is paid and held safely. Ship it and add tracking so the buyer can confirm.`,
+        href: `/orders/${order.id}`,
+        read: false,
+        createdAt: store.iso(),
+      });
+    }
     res.json({
       intent: result.intent,
       escrow: result.escrow,

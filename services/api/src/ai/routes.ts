@@ -24,6 +24,9 @@ import { audit, boardMeetings, presChat, presPosts, store, users, type PresPost 
 import { closeMeeting, openMeeting, ownerSays, view } from './boardroom.js';
 import { oreTurn } from './ore.js';
 import { speak, voiceConfigured } from './voice.js';
+import { audienceOf, checkBroadcast, deliveryStatus, sendBroadcast } from '../engine/notify.js';
+import { verificationConfigured, webhookConfigured } from '../engine/verification.js';
+import { broadcasts, verifications } from '../store.js';
 
 const speakLog = new Map<string, number[]>();
 
@@ -127,6 +130,58 @@ export function mountAiRoutes(app: Express, actorId: ActorFn): void {
   });
 
   /* President Ore's office (owner only) */
+  /* Messages to members: who would receive it, send it (audited), and what was sent. */
+  app.get('/api/admin/notify', (req, res) => {
+    if (!seat(req, res, actorId, 'notifications')) return;
+    const count = (a: string) => {
+      const people = audienceOf(a);
+      return Array.isArray(people) ? people.length : 0;
+    };
+    res.json({
+      delivery: deliveryStatus(),
+      audiences: ['everyone', 'buyers', 'sellers', 'verified_sellers', 'pro'].map((id) => ({ id, count: count(id) })),
+      history: broadcasts.all().slice(0, 50),
+    });
+  });
+
+  app.post('/api/admin/notify', (req, res) => {
+    const s = seat(req, res, actorId, 'notifications');
+    if (!s) return;
+    const body = (req.body ?? {}) as { title?: string; body?: string; audience?: string; kind?: string; href?: string; preview?: boolean };
+    const input = { title: String(body.title ?? ''), body: String(body.body ?? ''), audience: String(body.audience ?? ''), kind: body.kind === 'marketing' ? ('marketing' as const) : ('announcement' as const), href: body.href ? String(body.href) : undefined };
+    if (body.preview) {
+      const problem = checkBroadcast(input);
+      const people = audienceOf(input.audience);
+      res.json({ ok: !problem && Array.isArray(people), problem: problem ?? (Array.isArray(people) ? null : people.error), recipients: Array.isArray(people) ? people.length : 0 });
+      return;
+    }
+    const result = sendBroadcast(s.access.email || s.userId, input);
+    if ('error' in result) {
+      res.status(400).json({ error: 'invalid_message', detail: result.error });
+      return;
+    }
+    writeAudit(s.access.email || s.userId, 'notify.send', input.audience, { title: result.title, recipients: result.recipients, kind: result.kind });
+    res.json({ ok: true, broadcast: result });
+  });
+
+  /* Seller identity checks: configuration and each member's latest check (no documents are held here). */
+  app.get('/api/admin/verifications', (req, res) => {
+    if (!seat(req, res, actorId, 'sellers')) return;
+    const rows = verifications
+      .all()
+      .filter((v) => users.get(v.userId))
+      .map((v) => {
+        const u = users.get(v.userId);
+        return { userId: v.userId, handle: u?.handle ?? '', name: u?.displayName ?? '', status: u?.verificationStatus ?? 'unverified', providerStatus: v.providerStatus, kind: v.kind, startedAt: v.startedAt, decidedAt: v.decidedAt ?? null, reason: v.reason ?? null };
+      })
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    res.json({
+      configured: { person: verificationConfigured('person'), business: verificationConfigured('business'), webhook: webhookConfigured() },
+      required: valueOf<boolean>('sellers.verification_required'),
+      rows,
+    });
+  });
+
   app.get('/api/admin/president', (req, res) => {
     if (!seat(req, res, actorId, 'president')) return;
     const posts = presPosts.all();

@@ -10,6 +10,7 @@
  * happens only when the Owner approves that exact item. Text from members, staff and alerts is data, never
  * instructions.
  */
+import { isSeller } from '../engine/notify.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { call, aiCostSince, providerConfigured, type Block, type Message, type ToolDef } from './gateway.js';
 import { SETTINGS, applyChanges, checkChanges, valueOf } from './registry.js';
@@ -301,7 +302,7 @@ export function directivesBlock(): string {
 }
 
 function sendMemberMessage(subject: string, body: string, audience: string): number {
-  const recipients = users.all().filter((u) => (audience === 'sellers' ? u.sellerProfile : audience === 'buyers' ? !u.sellerProfile : true));
+  const recipients = users.all().filter((u) => (audience === 'sellers' ? isSeller(u) : audience === 'buyers' ? !isSeller(u) : true));
   for (const u of recipients) {
     notifications.create({ id: store.nextId('ntf'), userId: u.id, category: 'system', title: subject, body, href: '/notifications', read: false, createdAt: store.iso() });
   }

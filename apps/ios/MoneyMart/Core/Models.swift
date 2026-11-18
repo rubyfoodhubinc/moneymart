@@ -378,6 +378,25 @@ struct WalletResponse: Codable, Sendable {
     var transactions: [WalletTransaction]
 }
 
+/// The member's identity check (Didit). Documents never pass through MoneyMart.
+struct VerificationInfo: Codable, Sendable, Equatable {
+    var status: String
+    var kycLevel: Int?
+    var kind: String
+    var providerStatus: String?
+    var reason: String?
+    var startedAt: String?
+    var decidedAt: String?
+    var available: Bool
+    var canStart: Bool
+    var resumeUrl: String?
+}
+
+struct VerificationStart: Codable, Sendable {
+    var url: String
+    var verification: VerificationInfo
+}
+
 struct NotificationsResponse: Codable, Sendable {
     var items: [AppNotification]
     var unread: Int

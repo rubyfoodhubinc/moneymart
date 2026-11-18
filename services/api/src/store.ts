@@ -95,6 +95,12 @@ export const db = {
   presChat: new Map<string, PresChatLine>(),
   /** Boardroom meetings and one-to-one rooms with the executive team. */
   boardMeetings: new Map<string, BoardMeeting>(),
+  /** Identity checks (Didit), one per member. Private: never part of a profile. */
+  verifications: new Map<string, VerificationRecord>(),
+  /** Phones registered for push, keyed by device token. */
+  pushDevices: new Map<string, PushDevice>(),
+  /** Messages the Owner (or an approved President proposal) sent to members. */
+  broadcasts: new Map<string, BroadcastRecord>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
 };
@@ -443,7 +449,78 @@ export const payouts = {
   },
 };
 
+/* ── Identity checks ───────────────────────────────────── */
+export interface VerificationRecord {
+  userId: string;
+  provider: 'didit';
+  kind: 'person' | 'business';
+  sessionId: string;
+  /** Didit's own status word, exactly as sent ("Approved", "In Review", ...). */
+  providerStatus: string;
+  url?: string;
+  reason?: string;
+  startedAt: string;
+  updatedAt: string;
+  decidedAt?: string;
+}
+export const verifications = {
+  get: (userId: string) => db.verifications.get(userId),
+  all: () => [...db.verifications.values()],
+  bySession: (sessionId: string) => [...db.verifications.values()].find((v) => v.sessionId === sessionId),
+  save: (v: VerificationRecord) => {
+    db.verifications.set(v.userId, v);
+    return v;
+  },
+};
+
+/* ── Push devices ──────────────────────────────────────── */
+export interface PushDevice {
+  token: string;
+  userId: string;
+  platform: 'ios';
+  /** APNs environment the token belongs to. */
+  env: 'production' | 'sandbox';
+  updatedAt: string;
+}
+export const pushDevices = {
+  forUser: (userId: string) => [...db.pushDevices.values()].filter((d) => d.userId === userId),
+  save: (d: PushDevice) => {
+    db.pushDevices.set(d.token, d);
+    return d;
+  },
+  remove: (token: string) => db.pushDevices.delete(token),
+  count: () => db.pushDevices.size,
+};
+
+/* ── Broadcasts ────────────────────────────────────────── */
+export interface BroadcastRecord {
+  id: string;
+  by: string;
+  title: string;
+  body: string;
+  audience: string;
+  kind: 'announcement' | 'marketing';
+  href: string;
+  recipients: number;
+  pushed: number;
+  createdAt: string;
+}
+export const broadcasts = {
+  all: () => [...db.broadcasts.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  save: (b: BroadcastRecord) => {
+    db.broadcasts.set(b.id, b);
+    if (db.broadcasts.size > 500) db.broadcasts.delete(db.broadcasts.keys().next().value!);
+    return b;
+  },
+};
+
 /* ── Notifications ─────────────────────────────────────── */
+type NotificationListener = (n: AppNotification) => void;
+const notificationListeners: NotificationListener[] = [];
+/** Delivery (live banner, push) subscribes here, so every notification created anywhere is delivered the same way. */
+export function onNotification(listener: NotificationListener): void {
+  notificationListeners.push(listener);
+}
 export const notifications = {
   forUser: (userId: string) => db.notifications.get(userId) ?? [],
   create: (notification: AppNotification) => {
@@ -451,6 +528,13 @@ export const notifications = {
     list.unshift(notification);
     if (list.length > 120) list.splice(120);
     db.notifications.set(notification.userId, list);
+    for (const listener of notificationListeners) {
+      try {
+        listener(notification);
+      } catch {
+        /* delivery must never break the action that created the notification */
+      }
+    }
     return notification;
   },
   markAllRead: (userId: string) => {
@@ -560,6 +644,9 @@ const COLLECTIONS = [
   'presPosts',
   'presChat',
   'boardMeetings',
+  'verifications',
+  'pushDevices',
+  'broadcasts',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

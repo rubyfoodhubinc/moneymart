@@ -96,3 +96,7 @@ Reference: `scripts/verify-president.mjs` (61 checks: 34 for v1.0, 13 for the v1
 ## 7.11 Writing the stand-in
 
 The stand-in answers by who is speaking (the start of the system prompt) and what the owner asked (the text after `OWNER:`), returning Messages-API JSON with `content` blocks and `usage`. It records the key on every request so key separation can be checked.
+
+## 7.12 Verification and notifications (§8)
+
+Run `scripts/verify-notify.mjs`: stand-ins for Didit (HTTP) and Apple Push (HTTP/2) check starting and resuming a check, the decision on return, the webhook (bad signature, stale, unknown session, other member, replay refused), the Owner's verified-only switch, ES256 push tokens, badges, switches, dead tokens, order alerts and Owner messages. 54 checks.

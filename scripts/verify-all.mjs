@@ -76,6 +76,11 @@ const SUITES = [
     detail: 'owner-only office, drafts until approved, locked AI settings, signed directives, Ore requests, audit, AI cost',
   },
   {
+    name: 'Seller verification & notifications',
+    script: 'verify-notify.mjs',
+    detail: 'Didit checks (signed webhook, decision on return), verified-only switch, APNs push, order alerts, Owner messages',
+  },
+  {
     name: 'Concurrency across auctions',
     script: 'verify-concurrency.mjs',
     detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',

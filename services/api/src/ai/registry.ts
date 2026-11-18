@@ -29,6 +29,7 @@ const objectValue: Check = (v) => (v && typeof v === 'object' && !Array.isArray(
 export const SETTINGS: SettingDef[] = [
   { key: 'features.live_shows', label: 'Live shows open to sellers', group: 'features', defaultValue: true, check: bool },
   { key: 'features.buy_now', label: 'Buy It Now', group: 'features', defaultValue: true, check: bool },
+  { key: 'sellers.verification_required', label: 'Sellers must pass identity checks (Didit) before scheduling shows', group: 'features', defaultValue: false, check: bool },
   { key: 'features.ore', label: 'Ore assistant in the app', group: 'features', defaultValue: true, check: bool },
   { key: 'home.banner', label: 'Home banner message', group: 'home', defaultValue: '', check: text(140) },
   { key: 'home.featured_categories', label: 'Featured categories on Home', group: 'home', defaultValue: [], check: categoryList },

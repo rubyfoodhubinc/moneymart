@@ -281,6 +281,47 @@ final class MoneyMartUITests: XCTestCase {
         XCTAssertTrue(app.buttons["profile-ore"].waitForExistence(timeout: 5), "Ore is also in Profile")
     }
 
+    func testVerificationAndNotifications() async throws {
+        try await prepareLocalGateway()
+        app.buttons["welcome-skip"].tap()
+        try signIn("qa.verify@moneymart.test")
+
+        app.tabBars.buttons["Profile"].tap()
+        let verification = app.buttons["profile-verification"]
+        scrollTo(verification)
+        XCTAssertTrue(verification.waitForExistence(timeout: 10), "Profile has Verification")
+        verification.tap()
+
+        let status = element("verify-status")
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertEqual(status.label, "Verify your identity", "a new member starts unverified")
+        XCTAssertTrue(app.buttons["verify-start"].exists, "the check can be started")
+        keep("Verification - start")
+
+        app.buttons["verify-start"].tap()
+        let done = app.buttons["Done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 15), "Didit's page opens in the app")
+        sleep(2)
+        keep("Verification - Didit page")
+        done.tap()
+
+        let verified = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "You're verified")).firstMatch
+        XCTAssertTrue(verified.waitForExistence(timeout: 15), "coming back reads the result: verified")
+        keep("Verification - verified")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let notifications = app.buttons["profile-notifications"]
+        scrollTo(notifications)
+        XCTAssertTrue(notifications.waitForExistence(timeout: 5))
+        notifications.tap()
+        let note = app.buttons.matching(NSPredicate(format: "label CONTAINS 'You are verified'")).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 10), "the member is notified of the result")
+        XCTAssertTrue(app.buttons["notifications-turn-on"].exists, "the list offers to turn on iPhone notifications")
+        keep("Notifications - inbox")
+        note.tap()
+        XCTAssertTrue(element("verify-status").waitForExistence(timeout: 5), "tapping a notification opens its screen")
+    }
+
     /// Keeps a screenshot in the test result (for reviewing the design).
     private func keep(_ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())

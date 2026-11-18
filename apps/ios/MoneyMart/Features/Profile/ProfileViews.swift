@@ -22,7 +22,9 @@ struct ProfileView: View {
         }
         .buttonStyle(.plain)
         .navigationTitle("Profile")
-        .refreshable { await session.refresh() }
+        .refreshable { await session.refresh(); await loadUnread() }
+        .task(id: session.user?.id) { if session.isSignedIn { await loadUnread() } }
+        .onAppear { if session.isSignedIn { Task { await loadUnread() } } }
         .mmScreen()
     }
 
@@ -88,17 +90,33 @@ struct ProfileView: View {
             NavigationLink(value: Router.Route.orders) { row("shippingbox.fill", "Orders") }
             NavigationLink(value: Router.Route.wallet) { row("creditcard.fill", "Wallet & payouts") }
             NavigationLink(value: Router.Route.watchlist) { row("heart.fill", "Watchlist") }
-            NavigationLink(value: Router.Route.notifications) { row("bell.fill", "Notifications") }
+            NavigationLink(value: Router.Route.notifications) { row("bell.fill", "Notifications", badge: unread > 0 ? "\(unread)" : nil) }
+                .accessibilityIdentifier("profile-notifications")
+            NavigationLink(value: Router.Route.verification) {
+                row("checkmark.seal.fill", "Verification", badge: session.user?.verificationStatus == "verified" ? String(localized: "Verified") : nil)
+            }
+            .accessibilityIdentifier("profile-verification")
             NavigationLink(value: Router.Route.settings) { row("gearshape.fill", "Settings") }
         }
         .mmCard()
     }
 
-    private func row(_ symbol: String, _ title: LocalizedStringKey) -> some View {
+    @State private var unread = 0
+
+    private func loadUnread() async {
+        unread = (try? await APIClient.shared.notifications().unread) ?? unread
+    }
+
+    private func row(_ symbol: String, _ title: LocalizedStringKey, badge: String? = nil) -> some View {
         HStack(spacing: 14) {
             Image(systemName: symbol).foregroundStyle(MM.Color.gold).frame(width: 26)
             Text(title).font(MM.Font.body(16, weight: .medium)).foregroundStyle(MM.Color.ink)
             Spacer()
+            if let badge {
+                Text(badge).font(MM.Font.body(12, weight: .bold)).foregroundStyle(MM.Color.navy)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(MM.Color.gold, in: Capsule())
+            }
             Image(systemName: "chevron.right").font(.system(size: 13, weight: .bold)).foregroundStyle(MM.Color.ink3)
         }
         .padding(.horizontal, 16).padding(.vertical, 15)
@@ -205,6 +223,8 @@ struct WalletView: View {
 }
 
 struct NotificationsView: View {
+    @Environment(Router.self) private var router
+    @Environment(PushManager.self) private var push
     @State private var items: [AppNotification] = []
     @State private var loaded = false
     @State private var error: String?
@@ -216,7 +236,65 @@ struct NotificationsView: View {
             if loaded && items.isEmpty {
                 EmptyStateView(symbol: "bell", title: "All caught up", message: "Outbid alerts, show reminders and order updates land here.").listRowBackground(Color.clear)
             }
+            if loaded && !push.isOn {
+                pushCard.listRowBackground(MM.Color.card)
+            }
             ForEach(items) { note in
+                Button { Task { await tap(note) } } label: { noteRow(note) }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("notification-row")
+                    .listRowBackground(MM.Color.card)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .navigationTitle("Notifications")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Mark all read", systemImage: "checkmark.circle") { Task { _ = try? await APIClient.shared.markAllRead(); await load() } }
+                        .disabled(items.allSatisfy(\.read))
+                    Button("Notification settings", systemImage: "slider.horizontal.3") { router.profilePath.append(.settings) }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .accessibilityIdentifier("notifications-menu")
+            }
+        }
+        .task {
+            await push.refreshStatus()
+            await load()
+            push.clearBadge()
+            live = Realtime.shared.on("notification", as: AppNotification.self) { note in
+                if !items.contains(where: { $0.id == note.id }) { items.insert(note, at: 0) }
+            }
+        }
+        .refreshable { await load() }
+        .mmScreen()
+    }
+
+    private var pushCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "bell.badge.fill").font(.system(size: 22)).foregroundStyle(MM.Color.gold)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Turn on notifications").font(MM.Font.body(14, weight: .bold)).foregroundStyle(MM.Color.ink)
+                Text(push.status == .denied ? "Notifications are off for MoneyMart in iOS Settings." : "Know the moment you're outbid, a show goes live or an order ships.")
+                    .font(MM.Font.body(12)).foregroundStyle(MM.Color.ink2)
+            }
+            Spacer()
+            Button(push.status == .denied ? "Settings" : "Turn on") { Task { await push.turnOn() } }
+                .buttonStyle(.goldCompact)
+                .accessibilityIdentifier("notifications-turn-on")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func tap(_ note: AppNotification) async {
+        if !note.read, let index = items.firstIndex(where: { $0.id == note.id }) {
+            items[index].read = true
+            _ = try? await APIClient.shared.markRead(note.id)
+        }
+        if let href = note.href, href != "/notifications" { router.openPath(href) }
+    }
+
+    private func noteRow(_ note: AppNotification) -> some View {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: icon(note.category)).foregroundStyle(MM.Color.gold).frame(width: 28, height: 28).background(MM.Color.goldSoft, in: Circle())
                     VStack(alignment: .leading, spacing: 3) {
@@ -224,22 +302,10 @@ struct NotificationsView: View {
                         Text(note.body).font(MM.Font.body(13)).foregroundStyle(MM.Color.ink2)
                         Text(Format.relative(note.createdAt)).font(MM.Font.body(11)).foregroundStyle(MM.Color.ink3)
                     }
-                    if !note.read { Spacer(); Circle().fill(MM.Color.gold).frame(width: 8, height: 8) }
+                    Spacer(minLength: 0)
+                    if !note.read { Circle().fill(MM.Color.gold).frame(width: 8, height: 8) }
                 }
-                .listRowBackground(MM.Color.card)
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Notifications")
-        .toolbar {
-            Button("Mark all read") { Task { _ = try? await APIClient.shared.markAllRead(); await load() } }.disabled(items.allSatisfy(\.read))
-        }
-        .task {
-            await load()
-            live = Realtime.shared.on("notification", as: AppNotification.self) { note in items.insert(note, at: 0) }
-        }
-        .refreshable { await load() }
-        .mmScreen()
+                .contentShape(Rectangle())
     }
 
     private func icon(_ category: String) -> String {

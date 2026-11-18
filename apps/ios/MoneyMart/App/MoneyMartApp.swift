@@ -3,6 +3,7 @@ import AVFoundation
 
 @main
 struct MoneyMartApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var session = SessionStore()
     @State private var watchlist = WatchlistStore()
     @State private var router = Router()
@@ -26,10 +27,12 @@ struct MoneyMartApp: App {
                 .environment(router)
                 .environment(ore)
                 .environment(Realtime.shared)
+                .environment(PushManager.shared)
                 .preferredColorScheme(.dark)
                 .tint(MM.Color.gold)
                 .task { await session.bootstrap() }
                 .task { await ore.refreshStatus() }
+                .task { PushManager.shared.configure(router: router) }
                 .onOpenURL { router.open($0) }
         }
     }
@@ -67,7 +70,7 @@ private extension UIFont {
 @Observable
 final class Router {
     enum Tab: Hashable { case home, discover, live, sell, profile }
-    enum Route: Hashable { case auction(String), stream(String), notifications, orders, wallet, watchlist, settings }
+    enum Route: Hashable { case auction(String), stream(String), notifications, orders, wallet, watchlist, settings, verification }
 
     var tab: Tab = .home
     var homePath: [Route] = []
@@ -85,7 +88,31 @@ final class Router {
             tab = .home; homePath = [.auction(id)]
         case "stream", "live":
             tab = .live; livePath = [.stream(id)]
+        case "verification":
+            tab = .profile; profilePath = [.verification]
+        case "notifications":
+            tab = .profile; profilePath = [.notifications]
         default: break
+        }
+    }
+
+    /// Open the app path a notification carries (`/auctions/<id>`, `/orders/<id>`, `/stream/<id>`, `/verification` ...).
+    func openPath(_ href: String) {
+        let parts = href.split(separator: "?").first.map { $0.split(separator: "/").map(String.init) } ?? []
+        let id = parts.count > 1 ? parts[1] : ""
+        switch parts.first ?? "" {
+        case "auctions", "auction", "lot":
+            if !id.isEmpty { tab = .home; homePath = [.auction(id)] }
+        case "stream", "streams", "live":
+            if !id.isEmpty { tab = .live; livePath = [.stream(id)] }
+        case "orders":
+            tab = .profile; profilePath = [.orders]
+        case "account":
+            tab = .profile; profilePath = id == "wallet" ? [.wallet] : id == "selling" ? [.orders] : []
+        case "verification":
+            tab = .profile; profilePath = [.verification]
+        default:
+            tab = .profile; profilePath = [.notifications]
         }
     }
 }
@@ -153,6 +180,7 @@ extension View {
             case .wallet: WalletView()
             case .watchlist: WatchlistView()
             case .settings: SettingsView()
+            case .verification: VerificationView()
             }
         }
     }

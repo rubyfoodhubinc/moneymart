@@ -322,9 +322,16 @@ struct SellView: View {
             Text(ready ? "Schedule live shows and line up the items you’ll sell on air." : "Set up your shop once to host live shows. It takes about two minutes.")
                 .font(MM.Font.body(14)).foregroundStyle(MM.Color.ink2)
             if ready {
-                NavigationLink { MyShowsView() } label: { Label("My shows", systemImage: "calendar") }
-                    .buttonStyle(.goldCompact)
-                    .accessibilityIdentifier("studio-shows")
+                HStack(spacing: 10) {
+                    NavigationLink { MyShowsView() } label: { Label("My shows", systemImage: "calendar") }
+                        .buttonStyle(.goldCompact)
+                        .accessibilityIdentifier("studio-shows")
+                    if session.user?.verificationStatus != "verified" {
+                        NavigationLink(value: Router.Route.verification) { Label("Get verified", systemImage: "checkmark.seal") }
+                            .buttonStyle(.glass)
+                            .accessibilityIdentifier("studio-verify")
+                    }
+                }
             } else {
                 Button { showSellerSetup = true } label: { Label("Set up selling", systemImage: "sparkles") }
                     .buttonStyle(.goldCompact)

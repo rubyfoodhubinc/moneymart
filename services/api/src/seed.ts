@@ -635,6 +635,9 @@ export function clear(): void {
   db.payouts.clear();
   db.notifications.clear();
   db.priceHistory.clear();
+  // Tied to member accounts, so they go with them.
+  db.verifications.clear();
+  db.pushDevices.clear();
 }
 
 /** Wipe and rebuild the demo world. */

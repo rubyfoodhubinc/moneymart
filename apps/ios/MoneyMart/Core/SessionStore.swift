@@ -47,6 +47,7 @@ final class SessionStore {
             self.user = user
             status = .signedIn
             realtime.emit("user:join", user.id)
+            await PushManager.shared.signedIn(userId: user.id)
         } catch let error as APIError where error.status == 401 || error.status == 403 {
             await api.setToken(nil)
             realtime.updateToken(nil)
@@ -107,6 +108,7 @@ final class SessionStore {
             self.challenge = nil
             status = .signedIn
             realtime.emit("user:join", result.user.id)
+            await PushManager.shared.signedIn(userId: result.user.id)
             return true
         } catch {
             self.error = error.localizedDescription
@@ -117,6 +119,7 @@ final class SessionStore {
     func cancelChallenge() { challenge = nil; error = nil }
 
     func signOut() async {
+        await PushManager.shared.signedOut()
         _ = try? await api.signOut()
         await api.setToken(nil)
         realtime.updateToken(nil)
