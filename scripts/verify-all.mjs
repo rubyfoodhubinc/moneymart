@@ -61,6 +61,36 @@ const SUITES = [
     detail: 'changes persist, invalid input refused, export is real and scoped',
   },
   {
+    name: 'Categories, sellers & shows',
+    script: 'verify-shows.mjs',
+    detail: 'full taxonomy, seller onboarding, host-only show control, one open show per listing',
+  },
+  {
+    name: 'Live video (IVS + Cloudflare)',
+    script: 'verify-live-video.mjs',
+    detail: 'signed IVS calls, Cloudflare inputs, admin switch, automatic fallback, teardown',
+  },
+  {
+    name: 'President Ore & Owner console',
+    script: 'verify-president.mjs',
+    detail: 'owner-only office, drafts until approved, locked AI settings, signed directives, Ore requests, audit, AI cost',
+  },
+  {
+    name: 'Seller verification & notifications',
+    script: 'verify-notify.mjs',
+    detail: 'Didit checks (signed webhook, decision on return), verified-only switch, APNs push, order alerts, Owner messages',
+  },
+  {
+    name: 'Buyers, shipping, follows & safety',
+    script: 'verify-community.mjs',
+    detail: 'address gate, shipping per show + cap, Buy It Now stock, follows, blocks, reports, moderators, real earnings',
+  },
+  {
+    name: 'Engagement, seller tools & growth',
+    script: 'verify-engagement.mjs',
+    detail: 'Prize Drops, tips, offers, credit/coins/challenges/referrals, Seller Studio, clubs, leaderboards, messages, clips, promos, gated categories, vacation',
+  },
+  {
     name: 'Concurrency across auctions',
     script: 'verify-concurrency.mjs',
     detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',

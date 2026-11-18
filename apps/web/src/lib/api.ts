@@ -204,7 +204,99 @@ function qs(params: Record<string, string | number | undefined | null>): string 
   return text ? `?${text}` : '';
 }
 
+export type LiveVideoProviderId = 'ivs' | 'cloudflare';
+export interface LiveVideoStatus {
+  primary: LiveVideoProviderId;
+  autoFallback: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedByName?: string;
+  lastFailover?: { at: string; from: LiveVideoProviderId; to: LiveVideoProviderId; reason: string; showId: string };
+  providers: { id: LiveVideoProviderId; label: string; configured: boolean; role: 'primary' | 'backup' }[];
+  liveShows: { id: string; title: string; provider: LiveVideoProviderId }[];
+}
+
+
+/* ── Owner console & President Ore ── */
+export interface AdminMe { role: 'owner' | 'executive' | 'manager' | 'support' | 'analyst'; tabs: string[]; email: string; president: string }
+export interface PeriodNumbers { orders: number; gmv: number; buyersPremium: number; disputed: number }
+export interface BusinessReport {
+  days: number; now: PeriodNumbers; previous: PeriodNumbers; members: number; newMembers: number; sellers: number; newSellers: number;
+  liveShows: number; scheduledShows: number; openListings: number; aiCost: { usd: number; calls: number; unpriced: string[] };
+}
+export interface AdminOverview { today: BusinessReport; week: BusinessReport; month: BusinessReport; approvalsWaiting: number }
+export interface PresStaff { id: string; name: string; title: string; department: string; seat: string; role: string; brain: string[]; active: boolean }
+export interface PresPost {
+  id: string; staffId: string | null; kind: string; title: string; body: string; status: string; meta: Record<string, unknown>;
+  createdAt: string; decidedAt?: string; decidedBy?: string; result?: string;
+}
+export interface PresChatLine { id: string; thread: string; role: 'owner' | 'president'; text: string; at: string }
+export interface PresidentOffice {
+  name: string; configured: boolean; staff: PresStaff[]; approvals: PresPost[]; reports: PresPost[]; requests: PresPost[]; recent: PresPost[]; threads: string[];
+}
+export interface ConsoleSetting { key: string; label: string; group: string; value: unknown; defaultValue: unknown }
+export interface AdminProviders {
+  ai: { id: string; label: string; configured: boolean }[];
+  seats: { name: string; provider: string; model: string; backup?: string }[];
+  prices: Record<string, [number, number]>;
+  cost30d: { usd: number; calls: number; unpriced: string[] };
+}
+export interface BoardLine { id: string; speaker: string; name: string; text: string; at: string }
+export interface BoardMeeting {
+  id: string; kind: 'board' | 'room'; topic: string; seats: string[]; lines: BoardLine[]; status: 'open' | 'closed';
+  speaking: string | null; createdAt: string; closedAt?: string; minutesPostId?: string; lineCount?: number;
+}
+export interface Broadcast { id: string; by: string; title: string; body: string; audience: string; kind: 'announcement' | 'marketing'; href: string; recipients: number; pushed: number; createdAt: string }
+export interface NotifyStatus { delivery: { push: boolean; devices: number; topic: string }; audiences: { id: string; count: number }[]; history: Broadcast[] }
+export interface NotifyInput { title: string; body: string; audience: string; kind: 'announcement' | 'marketing'; href?: string }
+export interface VerificationRow { userId: string; handle: string; name: string; status: string; providerStatus: string; kind: 'person' | 'business'; startedAt: string; decidedAt: string | null; reason: string | null }
+export interface VerificationsAdmin { configured: { person: boolean; business: boolean; webhook: boolean }; required: boolean; rows: VerificationRow[] }
+export interface MarketCountry { code: string; name: string; flag: string; currency: string; currencySymbol?: string; buy: boolean; sell: boolean }
+export interface MarketsAdmin { countries: MarketCountry[]; usdPerUnit: Record<string, number>; ratesUpdatedAt: string | null; ratesSource: string; members?: Record<string, number> }
+export interface SafetyReportRow { id: string; kind: string; targetId: string; reason: string; note?: string; status: 'open' | 'actioned' | 'dismissed'; createdAt: string; reporter: string; target: string; resolution?: string }
+export interface AuditEntry { id: string; at: string; actor: string; action: string; target: string; detail: Record<string, unknown> }
+
 export const api = {
+  /** Owner console (404 for anyone without a seat). */
+  adminMe: () => request<AdminMe>('/api/admin/me'),
+  adminOverview: () => request<AdminOverview>('/api/admin/overview'),
+  adminProviders: () => request<AdminProviders>('/api/admin/providers'),
+  adminSettings: () => request<{ settings: ConsoleSetting[] }>('/api/admin/settings'),
+  saveAdminSettings: (changes: { key: string; value: unknown }[]) =>
+    request<{ ok: boolean }>('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ changes }) }),
+  adminNotify: () => request<NotifyStatus>('/api/admin/notify'),
+  previewNotify: (input: NotifyInput) =>
+    request<{ ok: boolean; problem: string | null; recipients: number }>('/api/admin/notify', { method: 'POST', body: JSON.stringify({ ...input, preview: true }) }),
+  sendNotify: (input: NotifyInput) => request<{ ok: boolean; broadcast: Broadcast }>('/api/admin/notify', { method: 'POST', body: JSON.stringify(input) }),
+  adminVerifications: () => request<VerificationsAdmin>('/api/admin/verifications'),
+  adminMarkets: () => request<MarketsAdmin>('/api/admin/markets'),
+  saveMarkets: (countries: Record<string, { buy?: boolean; sell?: boolean }>) =>
+    request<MarketsAdmin>('/api/admin/markets', { method: 'PUT', body: JSON.stringify({ countries }) }),
+  adminReports: () => request<{ items: SafetyReportRow[] }>('/api/admin/reports'),
+  resolveReport: (id: string, status: 'actioned' | 'dismissed' | 'open', resolution?: string) =>
+    request<{ ok: boolean }>(`/api/admin/reports/${id}`, { method: 'POST', body: JSON.stringify({ status, resolution }) }),
+  follow: (userId: string, on: boolean) => request<{ following: boolean; followersCount?: number }>(`/api/users/${userId}/follow`, { method: on ? 'POST' : 'DELETE' }),
+  relationship: (userId: string) => request<{ following: boolean; blocked: boolean; followersCount?: number }>(`/api/users/${userId}/relationship`),
+  adminAudit: (limit = 100) => request<{ entries: AuditEntry[] }>(`/api/admin/audit?limit=${limit}`),
+  president: () => request<PresidentOffice>('/api/admin/president'),
+  presidentChat: (thread = 'main') => request<{ lines: PresChatLine[] }>(`/api/admin/president/chat?thread=${encodeURIComponent(thread)}`),
+  askPresident: (text: string, thread = 'main') =>
+    request<{ reply: PresChatLine; approvalsWaiting: number }>('/api/admin/president/chat', { method: 'POST', body: JSON.stringify({ text, thread }) }),
+  decidePresident: (id: string, decision: 'approve' | 'deny') =>
+    request<{ ok: boolean; post: PresPost }>(`/api/admin/president/decide/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  boardMeetings: () => request<{ meetings: BoardMeeting[] }>('/api/admin/boardroom'),
+  boardMeeting: (id: string) => request<{ meeting: BoardMeeting }>(`/api/admin/boardroom/${id}`),
+  openBoardMeeting: (topic: string, staffIds?: string[]) =>
+    request<{ meeting: BoardMeeting }>('/api/admin/boardroom', { method: 'POST', body: JSON.stringify({ topic, staffIds }) }),
+  sayInBoardroom: (id: string, text: string) =>
+    request<{ meeting: BoardMeeting }>(`/api/admin/boardroom/${id}/say`, { method: 'POST', body: JSON.stringify({ text }) }),
+  closeBoardMeeting: (id: string) => request<{ meeting: BoardMeeting }>(`/api/admin/boardroom/${id}/close`, { method: 'POST', body: '{}' }),
+  presidentBriefing: () => request<{ post: PresPost; emailed: boolean }>('/api/admin/president/briefing', { method: 'POST', body: '{}' }),
+
+  /** Staff: which live video service new shows use, and the automatic backup. */
+  liveVideoStatus: () => request<LiveVideoStatus>('/api/admin/live-video'),
+  setLiveVideo: (body: { primary?: LiveVideoProviderId; autoFallback?: boolean }) =>
+    request<LiveVideoStatus>('/api/admin/live-video', { method: 'PUT', body: JSON.stringify(body) }),
   health: () => request<{ ok: boolean; liveStreams: number; liveAuctions: number; uptimeSeconds: number }>('/api/health'),
   config: () =>
     request<{
@@ -307,6 +399,12 @@ export const api = {
     request<AuctionListResponse>(`/api/auctions${qs(params)}`),
   auction: (id: string) => request<AuctionDetailResponse>(`/api/auctions/${id}`),
   auctionBids: (id: string) => request<{ bids: Bid[] }>(`/api/auctions/${id}/bids`),
+  /** Buys at the Buy It Now price; settles like a won lot and returns the order id. */
+  buyNow: (id: string) =>
+    request<{ ok: boolean; auction: AuctionWithRelations; orderId?: string }>(`/api/auctions/${id}/buy-now`, {
+      method: 'POST',
+      body: '{}',
+    }),
   placeBid: (id: string, body: { amount: number; bidderId?: string }) =>
     request<{ ok: boolean; auction: AuctionWithRelations; bids: Bid[] }>(`/api/auctions/${id}/bids`, {
       method: 'POST',

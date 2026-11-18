@@ -25,7 +25,7 @@ import type { CurrencyCode } from '@moneymart/tokens';
 import { ITEM_TIMER, MONETIZATION } from '@moneymart/tokens';
 import { money } from './engine/money.js';
 import { escrow as escrowService } from './engine/escrow.js';
-import { auctions, chat, items, notifications, orders, payouts, priceHistory, streams, store, users } from './store.js';
+import { auctions, chat, items, notifications, orders, payouts, priceHistory, streams, store, users, addresses } from './store.js';
 
 /* ── Procedural premium artwork ─────────────────────────────────────────────
    Each lot gets a deterministic, brand-palette SVG poster. No network calls,
@@ -635,6 +635,15 @@ export function clear(): void {
   db.payouts.clear();
   db.notifications.clear();
   db.priceHistory.clear();
+  // Tied to member accounts, so they go with them.
+  db.verifications.clear();
+  db.pushDevices.clear();
+  db.addresses.clear();
+  db.follows.clear();
+  db.blocks.clear();
+  db.reports.clear();
+  db.chatMutes.clear();
+  for (const name of ["giveaways", "tips", "watchlists", "wallets", "offers", "clips", "dms", "referrals", "promos"] as const) db[name].clear();
 }
 
 /** Wipe and rebuild the demo world. */
@@ -645,6 +654,17 @@ export function reseed(): void {
 
 export function seed(): void {
   buildUsers().forEach((user) => users.upsert(user));
+  // Demo members can bid straight away: each has a default shipping address in their own country.
+  const DEMO_ADDRESS: Record<string, { city: string; region: string; postalCode: string }> = {
+    US: { city: 'Houston', region: 'TX', postalCode: '77002' },
+    NG: { city: 'Lagos', region: 'LA', postalCode: '101241' },
+    GB: { city: 'London', region: 'LND', postalCode: 'EC1A 1BB' },
+    CA: { city: 'Toronto', region: 'ON', postalCode: 'M5H 2N2' },
+  };
+  for (const user of users.all()) {
+    const place = DEMO_ADDRESS[user.countryCode] ?? DEMO_ADDRESS.US;
+    addresses.save(user.id, [{ id: `adr_${user.id}`, fullName: user.displayName, line1: '1 Demo Street', ...place, countryCode: user.countryCode, isDefault: true, createdAt: new Date().toISOString() }]);
+  }
   store.db.session.userId = 'usr_you';
 
   const now = Date.now();

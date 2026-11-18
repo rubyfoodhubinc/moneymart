@@ -5,9 +5,9 @@
  * designs in the editor is drawn here, public and shareable.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { AuctionCard, StreamCard } from '@/components/auction';
 import { PageHeader, Section } from '@/components/site-shell';
 import {
@@ -57,6 +57,27 @@ export default function CreatorProfilePage() {
 
   const storefront = shop.data?.storefront;
   const profile = shop.data?.profile;
+
+  // Follow is saved on the account: the seller's followers and go-live alerts depend on it.
+  const relation = useQuery({
+    queryKey: ['relationship', profile?.id],
+    queryFn: () => api.relationship(profile!.id),
+    enabled: Boolean(profile?.id && user),
+  });
+  const [followers, setFollowers] = useState<number | undefined>();
+  useEffect(() => {
+    if (relation.data) {
+      setFollowed(relation.data.following);
+      setFollowers(relation.data.followersCount);
+    }
+  }, [relation.data]);
+  const followMutation = useMutation({
+    mutationFn: (on: boolean) => api.follow(profile!.id, on),
+    onSuccess: (result) => {
+      setFollowed(result.following);
+      setFollowers(result.followersCount);
+    },
+  });
   const lots = shop.data?.lots ?? [];
   const stream = shop.data?.stream ?? null;
 
@@ -136,7 +157,10 @@ export default function CreatorProfilePage() {
             <Button
               variant={followed ? 'navy' : 'gold'}
               icon={followed ? <CheckIcon size={15} /> : <SparkIcon size={15} />}
-              onClick={() => setFollowed((value) => !value)}
+              loading={followMutation.isPending}
+              disabled={!user || user.id === profile?.id}
+              title={!user ? 'Sign in to follow' : undefined}
+              onClick={() => followMutation.mutate(!followed)}
             >
               {followed ? 'Following' : 'Follow shop'}
             </Button>
@@ -179,7 +203,7 @@ export default function CreatorProfilePage() {
             </div>
             <Divider />
             <Stat icon={<TrendIcon size={14} />} label="Sales" value={profile.totalSales.toLocaleString()} />
-            <Stat icon={<UsersIcon size={13} />} label="Followers" value={formatViewers(profile.followersCount)} />
+            <Stat icon={<UsersIcon size={13} />} label="Followers" value={formatViewers(followers ?? profile.followersCount)} />
             <Stat icon={<GavelIcon size={13} />} label="Rating" value={`${profile.rating.toFixed(1)} ★`} />
             <Stat icon={<GlobeIcon size={13} />} label="Ships from" value={profile.countryCode} />
             <Stat icon={<ChartIcon size={13} />} label="Response" value={`${profile.responseTimeMinutes} min`} />

@@ -218,18 +218,54 @@ export const conditionGrades = [
     { value: 'fair', label: 'Fair', hint: 'Visible wear; fully functional.' },
     { value: 'parts', label: 'Parts Only', hint: 'Not functional; sold for parts or repair.' },
 ];
-export const categories = [
-    { id: 'sneakers', label: 'Sneakers', emoji: '👟' },
-    { id: 'watches', label: 'Watches', emoji: '⌚' },
-    { id: 'jewelry', label: 'Jewelry', emoji: '💎' },
-    { id: 'art', label: 'Art', emoji: '🖼️' },
-    { id: 'collectibles', label: 'Collectibles', emoji: '🏺' },
-    { id: 'cards', label: 'Trading Cards', emoji: '🃏' },
-    { id: 'fashion', label: 'Fashion', emoji: '🧥' },
-    { id: 'electronics', label: 'Electronics', emoji: '🎧' },
-    { id: 'vehicles', label: 'Vehicles', emoji: '🚗' },
-    { id: 'antiques', label: 'Antiques', emoji: '🕰️' },
+const sub = (prefix, entries) => entries.map(([id, label]) => ({ id: `${prefix}.${id}`, label }));
+export const categoryTree = [
+    { id: 'sneakers', label: 'Sneakers & Shoes', emoji: '👟', subcategories: sub('sneakers', [['sneakers', 'Sneakers'], ['boots', 'Boots'], ['dress', 'Dress Shoes'], ['heels', 'Heels & Flats'], ['kids', "Kids' Shoes"], ['sandals', 'Sandals & Slides']]) },
+    { id: 'watches', label: 'Watches', emoji: '⌚', subcategories: sub('watches', [['luxury', 'Luxury Watches'], ['vintage', 'Vintage Watches'], ['everyday', 'Everyday Watches'], ['smart', 'Smartwatches'], ['parts', 'Straps & Parts']]) },
+    { id: 'jewelry', label: 'Jewelry', emoji: '💎', subcategories: sub('jewelry', [['fine', 'Fine Jewelry'], ['fashion', 'Fashion Jewelry'], ['vintage', 'Vintage Jewelry'], ['mens', "Men's Jewelry"], ['gemstones', 'Loose Gemstones']]) },
+    { id: 'art', label: 'Art', emoji: '🖼️', subcategories: sub('art', [['paintings', 'Paintings'], ['prints', 'Prints & Posters'], ['sculpture', 'Sculpture'], ['photography', 'Photography'], ['digital', 'Digital & Mixed Media']]) },
+    { id: 'collectibles', label: 'Collectibles', emoji: '🏺', subcategories: sub('collectibles', [['figurines', 'Figurines'], ['pins', 'Pins & Patches'], ['memorabilia', 'Pop Culture Memorabilia'], ['stamps', 'Stamps'], ['other', 'Other Collectibles']]) },
+    { id: 'cards', label: 'Trading Card Games', emoji: '🃏', subcategories: sub('cards', [['singles', 'Singles'], ['sealed', 'Sealed Boxes & Packs'], ['graded', 'Graded Cards'], ['breaks', 'Breaks'], ['supplies', 'Card Supplies']]) },
+    { id: 'fashion', label: 'Fashion', emoji: '🧥', subcategories: sub('fashion', [['womens', "Women's Clothing"], ['mens', "Men's Clothing"], ['streetwear', 'Streetwear'], ['vintage', 'Vintage Clothing'], ['plus', 'Plus & Big & Tall'], ['activewear', 'Activewear']]) },
+    { id: 'electronics', label: 'Electronics', emoji: '🎧', subcategories: sub('electronics', [['phones', 'Phones & Tablets'], ['computers', 'Laptops & Computers'], ['audio', 'Audio & Headphones'], ['cameras', 'Cameras & Photography'], ['smarthome', 'Smart Home'], ['tv', 'TV & Video'], ['accessories', 'Accessories & Chargers']]) },
+    { id: 'vehicles', label: 'Vehicles & Parts', emoji: '🚗', subcategories: sub('vehicles', [['cars', 'Cars & Trucks'], ['motorcycles', 'Motorcycles'], ['parts', 'Parts & Accessories'], ['tools', 'Garage & Shop']]) },
+    { id: 'antiques', label: 'Antiques & Vintage', emoji: '🕰️', subcategories: sub('antiques', [['furniture', 'Antique Furniture'], ['decor', 'Vintage Decor'], ['glass', 'Glass & Pottery'], ['silver', 'Silver & Metalware'], ['textiles', 'Textiles & Rugs']]) },
+    { id: 'sports-cards', label: 'Sports Cards', emoji: '🏀', subcategories: sub('sports-cards', [['basketball', 'Basketball'], ['football', 'Football'], ['baseball', 'Baseball'], ['soccer', 'Soccer'], ['other', 'Other Sports'], ['breaks', 'Breaks']]) },
+    { id: 'sports-memorabilia', label: 'Sports Memorabilia', emoji: '🏈', subcategories: sub('sports-memorabilia', [['autographs', 'Autographs'], ['jerseys', 'Jerseys'], ['game-used', 'Game-Used'], ['fan-gear', 'Fan Gear']]) },
+    { id: 'coins', label: 'Coins & Currency', emoji: '🪙', subcategories: sub('coins', [['us', 'US Coins'], ['world', 'World Coins'], ['ancient', 'Ancient Coins'], ['paper', 'Paper Money'], ['graded', 'Graded Coins']]) },
+    { id: 'bullion', label: 'Precious Metals', emoji: '🥇', subcategories: sub('bullion', [['gold', 'Gold'], ['silver', 'Silver'], ['platinum', 'Platinum & Palladium'], ['rounds', 'Rounds & Bars']]) },
+    { id: 'video-games', label: 'Video Games', emoji: '🎮', subcategories: sub('video-games', [['consoles', 'Consoles'], ['games', 'Games'], ['retro', 'Retro Gaming'], ['accessories', 'Controllers & Accessories']]) },
+    { id: 'toys', label: 'Toys & Hobbies', emoji: '🧸', subcategories: sub('toys', [['figures', 'Action Figures'], ['dolls', 'Dolls'], ['designer', 'Designer & Blind-Box Toys'], ['plush', 'Plush'], ['building', 'Building Sets'], ['diecast', 'Diecast'], ['rc', 'RC Vehicles'], ['models', 'Models & Kits'], ['board-games', 'Board Games & Puzzles']]) },
+    { id: 'comics', label: 'Comics & Manga', emoji: '📚', subcategories: sub('comics', [['comics', 'Comic Books'], ['manga', 'Manga'], ['graphic-novels', 'Graphic Novels'], ['anime', 'Anime Merchandise'], ['graded', 'Graded Comics']]) },
+    { id: 'books-media', label: 'Books & Movies', emoji: '📖', subcategories: sub('books-media', [['books', 'Books'], ['rare-books', 'Rare & Signed Books'], ['movies', 'Movies & TV'], ['magazines', 'Magazines']]) },
+    { id: 'music', label: 'Music & Instruments', emoji: '🎸', subcategories: sub('music', [['vinyl', 'Vinyl Records'], ['cds', 'CDs & Cassettes'], ['instruments', 'Instruments'], ['audio-gear', 'Pro Audio & DJ'], ['memorabilia', 'Music Memorabilia']]) },
+    { id: 'bags', label: 'Bags & Accessories', emoji: '👜', subcategories: sub('bags', [['handbags', 'Handbags'], ['luxury', 'Luxury Bags'], ['wallets', 'Wallets'], ['sunglasses', 'Sunglasses'], ['hats', 'Hats & Scarves']]) },
+    { id: 'beauty', label: 'Beauty', emoji: '💄', subcategories: sub('beauty', [['makeup', 'Makeup'], ['skincare', 'Skincare'], ['fragrance', 'Fragrance'], ['hair', 'Hair Care'], ['nails', 'Nails'], ['tools', 'Beauty Tools']]) },
+    { id: 'health', label: 'Health & Wellness', emoji: '🌿', subcategories: sub('health', [['supplements', 'Supplements'], ['fitness', 'Fitness Equipment'], ['personal-care', 'Personal Care']]) },
+    { id: 'food', label: 'Food & Drink', emoji: '🍫', subcategories: sub('food', [['snacks', 'Candy & Snacks'], ['coffee-tea', 'Coffee & Tea'], ['sauces', 'Sauces & Condiments'], ['baked', 'Baked Goods'], ['specialty', 'Specialty Food'], ['drinks', 'Soda & Drinks'], ['meat-seafood', 'Meat & Seafood'], ['international', 'International Snacks'], ['other', 'Other Food & Drink']]) },
+    { id: 'home', label: 'Home & Garden', emoji: '🪴', subcategories: sub('home', [['decor', 'Home Decor'], ['kitchen', 'Kitchen & Dining'], ['furniture', 'Furniture'], ['bedding', 'Bedding & Bath'], ['garden', 'Garden & Patio'], ['candles', 'Candles & Fragrance']]) },
+    { id: 'appliances', label: 'Home Appliances', emoji: '🔌', subcategories: sub('appliances', [['kitchen', 'Kitchen Appliances'], ['cleaning', 'Cleaning'], ['climate', 'Heating & Cooling'], ['laundry', 'Laundry']]) },
+    { id: 'tools', label: 'Tools & Hardware', emoji: '🛠️', subcategories: sub('tools', [['power', 'Power Tools'], ['hand', 'Hand Tools'], ['outdoor-power', 'Outdoor Power Equipment'], ['storage', 'Tool Storage'], ['workwear', 'Workwear & Safety']]) },
+    { id: 'crafts', label: 'Arts & Crafts', emoji: '🧶', subcategories: sub('crafts', [['supplies', 'Craft Supplies'], ['yarn-fabric', 'Yarn & Fabric'], ['handmade', 'Handmade Goods'], ['scrapbooking', 'Scrapbooking & Stamps']]) },
+    { id: 'crystals', label: 'Rocks & Crystals', emoji: '🔮', subcategories: sub('crystals', [['crystals', 'Crystals'], ['minerals', 'Mineral Specimens'], ['fossils', 'Fossils'], ['jewelry', 'Crystal Jewelry']]) },
+    { id: 'outdoors', label: 'Outdoors & Sports', emoji: '⛺', subcategories: sub('outdoors', [['camping', 'Camping & Hiking'], ['fishing', 'Fishing'], ['hunting', 'Hunting'], ['cycling', 'Cycling'], ['golf', 'Golf'], ['team-sports', 'Team Sports Gear'], ['winter', 'Winter Sports']]) },
+    { id: 'baby-kids', label: 'Baby & Kids', emoji: '🍼', subcategories: sub('baby-kids', [['gear', 'Baby Gear'], ['clothing', 'Kids Clothing'], ['toys', 'Baby & Kids Toys'], ['nursery', 'Nursery']]) },
+    { id: 'pets', label: 'Pets', emoji: '🐾', subcategories: sub('pets', [['dogs', 'Dog Supplies'], ['cats', 'Cat Supplies'], ['aquarium', 'Aquarium'], ['small-pets', 'Small Pets & Birds']]) },
+    { id: 'wholesale', label: 'Wholesale & Liquidation', emoji: '📦', subcategories: sub('wholesale', [['pallets', 'Pallets'], ['lots', 'Bulk Lots'], ['returns', 'Customer Returns'], ['overstock', 'Overstock']]) },
+    { id: 'estate', label: 'Estate & Storage Finds', emoji: '🗝️', subcategories: sub('estate', [['storage-units', 'Storage Units'], ['estate-lots', 'Estate Lots'], ['mystery', 'Mystery Boxes']]) },
+    { id: 'everything-else', label: 'Everything Else', emoji: '✨', subcategories: sub('everything-else', [['gift-cards', 'Gift Cards & Vouchers'], ['tickets', 'Tickets & Experiences'], ['services', 'Services'], ['other', 'Other']]) },
 ];
+/** Top-level categories as a flat list (the original shape every client already reads). */
+export const categories = categoryTree.map(({ id, label, emoji }) => ({ id, label, emoji }));
+const categoryIds = new Set(categoryTree.map((entry) => entry.id));
+const subcategoryParent = new Map(categoryTree.flatMap((entry) => entry.subcategories.map((child) => [child.id, entry.id])));
+export function isCategory(id) {
+    return typeof id === 'string' && categoryIds.has(id);
+}
+/** True when `subcategoryId` exists and belongs to `categoryId`. */
+export function isSubcategoryOf(subcategoryId, categoryId) {
+    return typeof subcategoryId === 'string' && subcategoryParent.get(subcategoryId) === categoryId;
+}
 export const MONETIZATION = {
     /** §10 Creator revenue share — platform retains 15% of live GMV. */
     creatorPlatformShare: 0.15,

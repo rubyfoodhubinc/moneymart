@@ -17,12 +17,14 @@ import type {
   AutoBid,
   Bid,
   BidRejectedPayload,
+  Order,
   Stream,
 } from '@moneymart/types';
 import { ANTI_SNIPE } from '@moneymart/tokens';
 import { money } from './money.js';
 import { openEscrow } from './escrow.js';
 import { isProUser } from './subscriptions.js';
+import { buyerBlocker, quoteForSale } from './shipping.js';
 import { auctions, autoBids, items, notifications, orders, streams, store, users } from '../store.js';
 
 export type EngineEvent =
@@ -60,8 +62,26 @@ function reject(auction: Auction, reason: BidRejectedPayload['reason'], message:
  * §9.2 Anti-snipe extension: any bid landing inside the final 10 seconds pushes
  * the clock out by 30 seconds, defending fair competition.
  */
+/** In a live show, a late bid resets the clock to this many seconds left. */
+export const SHOW_BID_RESET_MS = 5_000;
+
 function applyAntiSnipe(auction: Auction): { extended: boolean; extensionMs: number } {
   const remaining = Date.parse(auction.endTime) - Date.now();
+  // Sudden death: the host promised the clock would not move.
+  if (auction.suddenDeath) return { extended: false, extensionMs: 0 };
+  /**
+   * Show items run on 5–120 second clocks; the 30-second timed-listing extension
+   * would triple a 10-second item. A late bid instead tops the clock back up to
+   * five seconds, so everyone still gets a fair last chance.
+   */
+  const stream = auction.streamId ? streams.get(auction.streamId) : undefined;
+  if (stream?.video && stream.activeAuctionId === auction.id) {
+    if (remaining > 0 && remaining < SHOW_BID_RESET_MS) {
+      auction.endTime = new Date(Date.now() + SHOW_BID_RESET_MS).toISOString();
+      return { extended: true, extensionMs: SHOW_BID_RESET_MS - remaining };
+    }
+    return { extended: false, extensionMs: 0 };
+  }
   if (remaining > 0 && remaining <= ANTI_SNIPE.triggerWindowMs) {
     const nextEnd = new Date(Date.parse(auction.endTime) + ANTI_SNIPE.extensionMs).toISOString();
     auction.endTime = nextEnd;
@@ -219,6 +239,8 @@ export function placeBid(input: PlaceBidInput): EngineEvent[] {
   if (auction.sellerId === input.bidderId) {
     return rejectWith('self_bid', 'You cannot bid on your own listing.');
   }
+  const blocker = buyerBlocker(auction, input.bidderId);
+  if (blocker) return rejectWith(blocker.reason, blocker.message);
   if (isRateLimited(input.bidderId, auction.id)) {
     return rejectWith('rate_limited', 'Slow down — too many bids in one second.');
   }
@@ -402,8 +424,6 @@ export function settleAuction(auctionId: string): EngineEvent[] {
 
   const hammerPrice = winning.amount;
   const winnerId = winning.bidderId;
-  const buyer = users.get(winnerId);
-  const seller = users.get(auction.sellerId);
   // Lots and auctions live in separate maps in the store, so the category —
   // which decides whether the luxury rate applies — comes from the item.
   const lot = items.get(auction.itemId);
@@ -416,21 +436,40 @@ export function settleAuction(auctionId: string): EngineEvent[] {
    */
   const winnerIsPro = isProUser(winnerId);
   const rate = money.effectiveBuyersPremiumRate(auction.buyersPremiumRate, lot?.categoryId, winnerIsPro);
-  const breakdown = money.costBreakdown({
-    hammerPrice,
-    currency: auction.currency,
-    buyersPremiumRate: rate,
-    isPro: winnerIsPro,
-    buyerCountry: buyer?.countryCode ?? 'US',
-    sellerCountry: seller?.countryCode ?? 'US',
-  });
+  const { order, breakdown } = createSaleOrder(auction, winnerId, hammerPrice, rate, winnerIsPro);
 
   auction.status = 'sold';
   auction.hammerPrice = hammerPrice;
   auction.winnerId = winnerId;
   auctions.save(auction);
 
+  notifyWinner(auction, winnerId, hammerPrice, rate, order.totalAmount, order.id);
+  notifySeller(auction, hammerPrice);
+
+  // Build the expanded projection the clients render, without importing the
+  // HTTP layer's view helper (keeps the engine transport-agnostic).
+  return finishWon(events, auction, winnerId, hammerPrice, breakdown);
+}
+
+/** Price, shipping, tax and the order + escrow for one sale (an auction win or one Buy It Now unit). */
+function createSaleOrder(auction: Auction, winnerId: string, hammerPrice: number, rate: number, winnerIsPro: boolean) {
+  const buyer = users.get(winnerId);
+  const seller = users.get(auction.sellerId);
+  const quote = quoteForSale(auction, winnerId, hammerPrice);
+  const breakdown = money.costBreakdown({
+    hammerPrice,
+    currency: auction.currency,
+    buyersPremiumRate: rate,
+    isPro: winnerIsPro,
+    buyerCountry: quote.shippingAddress?.countryCode ?? buyer?.countryCode ?? 'US',
+    sellerCountry: seller?.sellerProfile?.returnAddress?.countryCode?.toUpperCase() ?? seller?.countryCode ?? 'US',
+    shipping: quote.amount,
+  });
   const order = orders.create({
+    streamId: auction.streamId,
+    shippingNote: quote.note,
+    shipToName: quote.shipToName,
+    shippingAddress: quote.shippingAddress,
     id: store.nextId('ord'),
     auctionId: auction.id,
     buyerId: winnerId,
@@ -456,18 +495,23 @@ export function settleAuction(auctionId: string): EngineEvent[] {
     buyerCountry: buyer?.countryCode,
     sellerCountry: seller?.countryCode,
   });
+  return { order, breakdown };
+}
 
+function notifyWinner(auction: Auction, winnerId: string, hammerPrice: number, rate: number, total: number, orderId: string): void {
   notifications.create({
     id: store.nextId('ntf'),
     userId: winnerId,
     category: 'orders',
     title: 'You won the lot',
-    body: `${auction.title} — hammer ${money.formatMoney(hammerPrice, auction.currency)} plus ${Math.round(rate * 100)}% buyer's premium. Total ${money.formatMoney(order.totalAmount, auction.currency)} due; funds are held in escrow until you confirm delivery. Invoice ${order.id}.`,
-    href: `/orders/${order.id}`,
+    body: `${auction.title} — hammer ${money.formatMoney(hammerPrice, auction.currency)} plus ${Math.round(rate * 100)}% buyer's premium. Total ${money.formatMoney(total, auction.currency)} due; funds are held in escrow until you confirm delivery. Invoice ${orderId}.`,
+    href: `/orders/${orderId}`,
     read: false,
     createdAt: store.iso(),
   });
+}
 
+function notifySeller(auction: Auction, hammerPrice: number): void {
   notifications.create({
     id: store.nextId('ntf'),
     userId: auction.sellerId,
@@ -478,9 +522,9 @@ export function settleAuction(auctionId: string): EngineEvent[] {
     read: false,
     createdAt: store.iso(),
   });
+}
 
-  // Build the expanded projection the clients render, without importing the
-  // HTTP layer's view helper (keeps the engine transport-agnostic).
+function finishWon(events: EngineEvent[], auction: Auction, winnerId: string, hammerPrice: number, breakdown: { buyersPremium: number; total: number }): EngineEvent[] {
   const wonItem = items.get(auction.itemId);
   const wonSeller = users.get(auction.sellerId);
   const payload: AuctionWonPayload = {
@@ -517,6 +561,7 @@ export function settleAuction(auctionId: string): EngineEvent[] {
       reserveMet: true,
     },
     winnerId,
+    winnerHandle: users.get(winnerId)?.handle,
     hammerPrice,
     buyersPremium: breakdown.buyersPremium,
     total: breakdown.total,
@@ -535,6 +580,16 @@ export function advanceStreamQueue(stream: Stream): EngineEvent[] {
   });
 
   stream.itemQueue = queue;
+  /**
+   * A host-run show (one with real video) waits for the host to put the next
+   * item on screen, with its own timer and price. Only the unattended demo rooms
+   * roll straight on to the next lot.
+   */
+  if (stream.video) {
+    stream.activeAuctionId = undefined;
+    streams.save(stream);
+    return [];
+  }
   const nextId = queue[0];
   if (!nextId) {
     stream.activeAuctionId = undefined;
@@ -551,6 +606,88 @@ export function advanceStreamQueue(stream: Stream): EngineEvent[] {
   }
   streams.save(stream);
   return [];
+}
+
+/**
+ * Buy It Now: the buyer takes the lot at the Buy It Now price immediately. It is
+ * recorded as a winning bid at that price and settled through the normal path,
+ * so the order, escrow, fees and notifications are exactly those of a won lot.
+ */
+export function buyItNow(input: { auctionId: string; buyerId: string; buyerHandle: string }): EngineEvent[] {
+  const events: EngineEvent[] = [];
+  const auction = auctions.get(input.auctionId);
+  if (!auction) return events;
+  const reject = (reason: BidRejectedPayload['reason'], message: string) => {
+    events.push({ type: 'rejected', payload: { auctionId: auction.id, reason, message, minimumBid: 0 }, bidderId: input.buyerId });
+    return events;
+  };
+  const price = auction.buyItNowPrice;
+  if (!price || price <= 0) return reject('auction_not_live', 'This listing has no Buy It Now price.');
+  if (auction.status !== 'live' || Date.parse(auction.endTime) <= Date.now()) {
+    return reject('auction_ended', 'This listing is not available to buy right now.');
+  }
+  if (auction.sellerId === input.buyerId) return reject('self_bid', 'You cannot buy your own listing.');
+  // Once bidding passes the Buy It Now price, the lot is decided by bidding.
+  if (auction.currentBid >= price) return reject('auction_ended', 'Bidding has passed the Buy It Now price.');
+  if (!users.get(input.buyerId)) return reject('insufficient_funds', 'No verified payment method on file.');
+  const blocker = buyerBlocker(auction, input.buyerId);
+  if (blocker) return reject(blocker.reason, blocker.message);
+
+  // Several units: sell one, keep the listing open until the last unit goes.
+  const quantity = Math.max(1, auction.quantity ?? 1);
+  const sold = auction.quantitySold ?? 0;
+  if (sold >= quantity) return reject('sold_out', 'Sold out.');
+  if (quantity - sold > 1) {
+    const isPro = isProUser(input.buyerId);
+    const rate = money.effectiveBuyersPremiumRate(auction.buyersPremiumRate, items.get(auction.itemId)?.categoryId, isPro);
+    const { order } = createSaleOrder(auction, input.buyerId, price, rate, isPro);
+    auction.quantitySold = sold + 1;
+    auctions.save(auction);
+    notifyWinner(auction, input.buyerId, price, rate, order.totalAmount, order.id);
+    notifySeller(auction, price);
+    events.push({ type: 'sold', auction: { ...auction } });
+    return events;
+  }
+  auction.quantitySold = sold + 1;
+
+  recordBid({ auction, bidderId: input.buyerId, bidderHandle: input.buyerHandle, amount: price, isAutoBid: false });
+  auction.endTime = new Date(Date.now() - 1).toISOString();
+  auctions.save(auction);
+  events.push(...settleAuction(auction.id));
+  if (auction.streamId) {
+    const stream = streams.get(auction.streamId);
+    if (stream) events.push(...advanceStreamQueue(stream));
+  }
+  return events;
+}
+
+/**
+ * Sell one unit at an agreed price (an accepted offer). Same order, escrow, fees and alerts as Buy It Now;
+ * the listing closes when its last unit goes.
+ */
+export function sellAt(input: { auctionId: string; buyerId: string; price: number }): { order?: Order; error?: string; message?: string } {
+  const auction = auctions.get(input.auctionId);
+  if (!auction) return { error: 'auction_not_found', message: 'This listing is gone.' };
+  if (!['live', 'scheduled'].includes(auction.status)) return { error: 'auction_ended', message: 'This listing is no longer for sale.' };
+  if (auction.sellerId === input.buyerId) return { error: 'self_bid', message: 'You cannot buy your own listing.' };
+  const blocker = buyerBlocker(auction, input.buyerId);
+  if (blocker) return { error: blocker.reason, message: blocker.message };
+  const quantity = Math.max(1, auction.quantity ?? 1);
+  const sold = auction.quantitySold ?? 0;
+  if (sold >= quantity) return { error: 'sold_out', message: 'Sold out.' };
+  const isPro = isProUser(input.buyerId);
+  const rate = money.effectiveBuyersPremiumRate(auction.buyersPremiumRate, items.get(auction.itemId)?.categoryId, isPro);
+  const { order } = createSaleOrder(auction, input.buyerId, input.price, rate, isPro);
+  auction.quantitySold = sold + 1;
+  if (auction.quantitySold >= quantity) {
+    auction.status = 'sold';
+    auction.winnerId = input.buyerId;
+    auction.currentBid = Math.max(auction.currentBid, input.price);
+  }
+  auctions.save(auction);
+  notifyWinner(auction, input.buyerId, input.price, rate, order.totalAmount, order.id);
+  notifySeller(auction, input.price);
+  return { order };
 }
 
 /** Maintain a live lot's clock; called from the server heartbeat. */
@@ -580,6 +717,7 @@ export const engine = {
   setAutoBid,
   cancelAutoBid,
   settleAuction,
+  buyItNow,
   tickAuction,
   advanceStreamQueue,
   auctionsDueForSettlement,

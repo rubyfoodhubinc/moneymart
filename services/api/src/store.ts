@@ -9,11 +9,14 @@
  */
 import type {
   AppNotification,
+  BuyerAddress,
+  SafetyReport,
   EscrowRecord,
   Storefront,
   Auction,
   AutoBid,
   Bid,
+  CategoryRequest,
   ChatMessage,
   Item,
   Order,
@@ -80,8 +83,259 @@ export const db = {
    * the link would silently create a duplicate account on the next sign-in.
    */
   oauthIdentities: new Map<string, string>(),
+  /** Seller requests for categories the taxonomy does not cover yet. */
+  categoryRequests: new Map<string, CategoryRequest>(),
+  /** Platform settings staff change at runtime (e.g. the live video provider). */
+  settings: new Map<string, unknown>(),
+  /** AI usage and cost per day, provider, model and role (operating cost). */
+  aiSpend: new Map<string, AiSpendRow>(),
+  /** Every Owner-console and AI action: who, what, when. */
+  audit: new Map<string, AuditRow>(),
+  /** President Ore's office: staff, workspace items (reports, drafts, requests) and the owner's chat. */
+  presStaff: new Map<string, PresStaff>(),
+  presPosts: new Map<string, PresPost>(),
+  presChat: new Map<string, PresChatLine>(),
+  /** Boardroom meetings and one-to-one rooms with the executive team. */
+  boardMeetings: new Map<string, BoardMeeting>(),
+  /** Identity checks (Didit), one per member. Private: never part of a profile. */
+  verifications: new Map<string, VerificationRecord>(),
+  /** Phones registered for push, keyed by device token. */
+  pushDevices: new Map<string, PushDevice>(),
+  /** Messages the Owner (or an approved President proposal) sent to members. */
+  broadcasts: new Map<string, BroadcastRecord>(),
+  /** Buyers' shipping addresses, per member. Private. */
+  addresses: new Map<string, BuyerAddress[]>(),
+  /** Follows, keyed `${followerId}>${sellerId}`. */
+  follows: new Map<string, { followerId: string; sellerId: string; at: string }>(),
+  /** Blocks, keyed `${blockerId}>${blockedId}`. */
+  blocks: new Map<string, { blockerId: string; blockedId: string; at: string }>(),
+  /** Reports from members to the Owner console. */
+  reports: new Map<string, SafetyReport>(),
+  /** Chat timeouts in a show, keyed `${streamId}>${userId}` → until (ISO). */
+  chatMutes: new Map<string, string>(),
+  /** Prize Drops (giveaways) run in shows. */
+  giveaways: new Map<string, Giveaway>(),
+  /** Tips viewers sent hosts. */
+  tips: new Map<string, Tip>(),
+  /** Saved listings per member. */
+  watchlists: new Map<string, string[]>(),
+  /** Coins, credit and challenge progress per member. */
+  wallets: new Map<string, Wallet>(),
+  /** Offers on Buy It Now listings. */
+  offers: new Map<string, Offer>(),
+  /** Clips cut from shows. */
+  clips: new Map<string, Clip>(),
+  /** Direct messages, keyed by thread (the two member ids, sorted, joined by "|"). */
+  dms: new Map<string, DirectMessage[]>(),
+  /** Who invited whom, keyed by the invited member. */
+  referrals: new Map<string, Referral>(),
+  /** Paid promotion of a show or listing. */
+  promos: new Map<string, Promo>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
+};
+
+
+/* ── Engagement and growth records (Waves B and C) ─────── */
+export interface Giveaway {
+  id: string;
+  streamId: string;
+  sellerId: string;
+  title: string;
+  image?: string;
+  followersOnly: boolean;
+  entrants: string[];
+  status: 'open' | 'drawn' | 'cancelled';
+  winnerId?: string;
+  orderId?: string;
+  createdAt: string;
+  drawnAt?: string;
+}
+export interface Tip { id: string; streamId: string; fromId: string; toId: string; amount: number; currency: string; note?: string; at: string }
+export interface WalletEntry { at: string; kind: 'coins' | 'credit'; amount: number; reason: string }
+export interface Wallet {
+  userId: string;
+  coins: number;
+  credit: number;
+  /** Watch & Earn: minutes credited per stream today, keyed `${day}:${streamId}`. */
+  watched: Record<string, number>;
+  /** Challenge ids already claimed. */
+  claimed: string[];
+  history: WalletEntry[];
+}
+export interface Offer {
+  id: string;
+  auctionId: string;
+  buyerId: string;
+  sellerId: string;
+  amount: number;
+  currency: string;
+  status: 'pending' | 'countered' | 'accepted' | 'declined' | 'expired' | 'withdrawn';
+  counterAmount?: number;
+  orderId?: string;
+  message?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface Clip { id: string; streamId: string; creatorId: string; byId: string; title: string; startSec: number; endSec: number; views: number; createdAt: string }
+export interface DirectMessage { id: string; fromId: string; toId: string; body: string; at: string; readAt?: string }
+export interface Referral { referredId: string; referrerId: string; code: string; at: string; rewardedAt?: string }
+export interface Promo { id: string; sellerId: string; kind: 'stream' | 'listing'; targetId: string; amount: number; currency: string; startsAt: string; endsAt: string }
+
+/* ── AI spend ──────────────────────────────────────────── */
+export interface AiSpendRow {
+  id: string;
+  day: string;
+  provider: string;
+  model: string;
+  role: string;
+  calls: number;
+  tokensIn: number;
+  tokensOut: number;
+  usd: number;
+  /** False when the model has no price set (recorded, never assumed free). */
+  priced: boolean;
+}
+export const aiSpend = {
+  all: () => [...db.aiSpend.values()],
+  get: (id: string) => db.aiSpend.get(id),
+  save: (row: AiSpendRow) => {
+    db.aiSpend.set(row.id, row);
+    return row;
+  },
+};
+
+/* ── Audit log ─────────────────────────────────────────── */
+export interface AuditRow {
+  id: string;
+  at: string;
+  actor: string;
+  action: string;
+  target: string;
+  detail: Record<string, unknown>;
+}
+export const audit = {
+  add: (row: AuditRow) => {
+    db.audit.set(row.id, row);
+    // Bounded: the newest 20,000 entries are kept.
+    if (db.audit.size > 20_000) db.audit.delete(db.audit.keys().next().value!);
+    return row;
+  },
+  recent: (n = 200) => [...db.audit.values()].slice(-n).reverse(),
+};
+
+/* ── President Ore's office ────────────────────────────── */
+export interface PresStaff {
+  id: string;
+  name: string;
+  title: string;
+  department: string;
+  /** The AI seat (model) this member thinks with. */
+  seat: string;
+  role: string;
+  brain: string[];
+  active: boolean;
+  sort: number;
+}
+export type PresPostKind = 'report' | 'request' | 'alert' | 'draft_change' | 'draft_directive' | 'draft_member_message' | 'draft_post' | 'draft_ad';
+export type PresPostStatus = 'info' | 'pending' | 'approved' | 'denied' | 'done' | 'failed';
+export interface PresPost {
+  id: string;
+  staffId: string | null;
+  kind: PresPostKind;
+  title: string;
+  body: string;
+  status: PresPostStatus;
+  meta: Record<string, unknown>;
+  createdAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  result?: string;
+}
+export interface PresChatLine {
+  id: string;
+  thread: string;
+  role: 'owner' | 'president';
+  text: string;
+  at: string;
+}
+export const presStaff = {
+  all: () => [...db.presStaff.values()].sort((a, b) => a.sort - b.sort),
+  get: (id: string) => db.presStaff.get(id),
+  save: (s: PresStaff) => {
+    db.presStaff.set(s.id, s);
+    return s;
+  },
+};
+export const presPosts = {
+  all: () => [...db.presPosts.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  get: (id: string) => db.presPosts.get(id),
+  save: (p: PresPost) => {
+    db.presPosts.set(p.id, p);
+    if (db.presPosts.size > 5_000) db.presPosts.delete(db.presPosts.keys().next().value!);
+    return p;
+  },
+};
+export const presChat = {
+  thread: (thread: string, n = 40) => [...db.presChat.values()].filter((l) => l.thread === thread).slice(-n),
+  threads: () => [...new Set([...db.presChat.values()].map((l) => l.thread))],
+  add: (l: PresChatLine) => {
+    db.presChat.set(l.id, l);
+    if (db.presChat.size > 10_000) db.presChat.delete(db.presChat.keys().next().value!);
+    return l;
+  },
+};
+
+/* ── Boardroom ─────────────────────────────────────────── */
+export interface BoardLine {
+  id: string;
+  /** 'owner', 'president', or a staff id. */
+  speaker: string;
+  name: string;
+  text: string;
+  at: string;
+}
+export interface BoardMeeting {
+  id: string;
+  kind: 'board' | 'room';
+  topic: string;
+  seats: string[];
+  lines: BoardLine[];
+  status: 'open' | 'closed';
+  /** Who is talking right now (a staff id or 'president'), while a round runs. */
+  speaking: string | null;
+  createdAt: string;
+  createdBy: string;
+  closedAt?: string;
+  minutesPostId?: string;
+}
+export const boardMeetings = {
+  all: () => [...db.boardMeetings.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  get: (id: string) => db.boardMeetings.get(id),
+  save: (m: BoardMeeting) => {
+    db.boardMeetings.set(m.id, m);
+    if (db.boardMeetings.size > 500) db.boardMeetings.delete(db.boardMeetings.keys().next().value!);
+    return m;
+  },
+};
+
+/* ── Platform settings ─────────────────────────────────── */
+export const settings = {
+  get: <T>(key: string): T | undefined => db.settings.get(key) as T | undefined,
+  set: <T>(key: string, value: T) => {
+    db.settings.set(key, value);
+    return value;
+  },
+};
+
+/* ── Category requests ─────────────────────────────────── */
+export const categoryRequests = {
+  all: () => [...db.categoryRequests.values()],
+  byUser: (userId: string) => [...db.categoryRequests.values()].filter((r) => r.userId === userId),
+  create: (request: CategoryRequest) => {
+    db.categoryRequests.set(request.id, request);
+    return request;
+  },
 };
 
 /* ── Users ─────────────────────────────────────────────── */
@@ -238,6 +492,12 @@ export const chat = {
     db.chat.set(message.streamId, list);
     return message;
   },
+  remove: (streamId: string, messageId: string) => {
+    const list = db.chat.get(streamId) ?? [];
+    const next = list.filter((m) => m.id !== messageId);
+    db.chat.set(streamId, next);
+    return next.length !== list.length;
+  },
   pin: (streamId: string, messageId: string | null) => {
     const list = db.chat.get(streamId) ?? [];
     list.forEach((message) => {
@@ -248,6 +508,13 @@ export const chat = {
 };
 
 /* ── Orders & payouts ──────────────────────────────────── */
+type OrderListener = (order: Order) => void;
+const orderListeners: OrderListener[] = [];
+/** Celebrations, referrals and challenges subscribe here so every new order is seen once. */
+export function onOrderCreated(listener: OrderListener): void {
+  orderListeners.push(listener);
+}
+
 export const orders = {
   all: () => [...db.orders.values()],
   get: (id: string) => db.orders.get(id),
@@ -255,6 +522,7 @@ export const orders = {
   selling: (userId: string) => [...db.orders.values()].filter((o) => o.sellerId === userId),
   create: (order: Order) => {
     db.orders.set(order.id, order);
+    for (const listener of orderListeners) listener(order);
     return order;
   },
   save: (order: Order) => {
@@ -272,7 +540,134 @@ export const payouts = {
   },
 };
 
+/* ── Identity checks ───────────────────────────────────── */
+export interface VerificationRecord {
+  userId: string;
+  provider: 'didit';
+  kind: 'person' | 'business';
+  sessionId: string;
+  /** Didit's own status word, exactly as sent ("Approved", "In Review", ...). */
+  providerStatus: string;
+  url?: string;
+  reason?: string;
+  startedAt: string;
+  updatedAt: string;
+  decidedAt?: string;
+}
+export const verifications = {
+  get: (userId: string) => db.verifications.get(userId),
+  all: () => [...db.verifications.values()],
+  bySession: (sessionId: string) => [...db.verifications.values()].find((v) => v.sessionId === sessionId),
+  save: (v: VerificationRecord) => {
+    db.verifications.set(v.userId, v);
+    return v;
+  },
+};
+
+/* ── Push devices ──────────────────────────────────────── */
+export interface PushDevice {
+  token: string;
+  userId: string;
+  platform: 'ios';
+  /** APNs environment the token belongs to. */
+  env: 'production' | 'sandbox';
+  updatedAt: string;
+}
+export const pushDevices = {
+  forUser: (userId: string) => [...db.pushDevices.values()].filter((d) => d.userId === userId),
+  save: (d: PushDevice) => {
+    db.pushDevices.set(d.token, d);
+    return d;
+  },
+  remove: (token: string) => db.pushDevices.delete(token),
+  count: () => db.pushDevices.size,
+};
+
+/* ── Broadcasts ────────────────────────────────────────── */
+export interface BroadcastRecord {
+  id: string;
+  by: string;
+  title: string;
+  body: string;
+  audience: string;
+  kind: 'announcement' | 'marketing';
+  href: string;
+  recipients: number;
+  pushed: number;
+  createdAt: string;
+}
+export const broadcasts = {
+  all: () => [...db.broadcasts.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  save: (b: BroadcastRecord) => {
+    db.broadcasts.set(b.id, b);
+    if (db.broadcasts.size > 500) db.broadcasts.delete(db.broadcasts.keys().next().value!);
+    return b;
+  },
+};
+
+/* ── Buyer addresses ───────────────────────────────────── */
+export const addresses = {
+  forUser: (userId: string) => db.addresses.get(userId) ?? [],
+  defaultFor: (userId: string) => {
+    const list = db.addresses.get(userId) ?? [];
+    return list.find((a) => a.isDefault) ?? list[0];
+  },
+  save: (userId: string, list: BuyerAddress[]) => {
+    db.addresses.set(userId, list);
+    return list;
+  },
+};
+
+/* ── Follows and blocks ────────────────────────────────── */
+export const follows = {
+  is: (followerId: string, sellerId: string) => db.follows.has(`${followerId}>${sellerId}`),
+  add: (followerId: string, sellerId: string) => {
+    db.follows.set(`${followerId}>${sellerId}`, { followerId, sellerId, at: new Date().toISOString() });
+  },
+  remove: (followerId: string, sellerId: string) => db.follows.delete(`${followerId}>${sellerId}`),
+  followersOf: (sellerId: string) => [...db.follows.values()].filter((f) => f.sellerId === sellerId).map((f) => f.followerId),
+  following: (followerId: string) => [...db.follows.values()].filter((f) => f.followerId === followerId).map((f) => f.sellerId),
+};
+export const blocks = {
+  /** True when `blockerId` has blocked `blockedId`. */
+  has: (blockerId: string, blockedId: string) => db.blocks.has(`${blockerId}>${blockedId}`),
+  /** True when either has blocked the other. */
+  between: (a: string, b: string) => db.blocks.has(`${a}>${b}`) || db.blocks.has(`${b}>${a}`),
+  add: (blockerId: string, blockedId: string) => {
+    db.blocks.set(`${blockerId}>${blockedId}`, { blockerId, blockedId, at: new Date().toISOString() });
+  },
+  remove: (blockerId: string, blockedId: string) => db.blocks.delete(`${blockerId}>${blockedId}`),
+  by: (blockerId: string) => [...db.blocks.values()].filter((b) => b.blockerId === blockerId).map((b) => b.blockedId),
+};
+
+/* ── Reports ───────────────────────────────────────────── */
+export const reports = {
+  all: () => [...db.reports.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  get: (id: string) => db.reports.get(id),
+  save: (r: SafetyReport) => {
+    db.reports.set(r.id, r);
+    return r;
+  },
+};
+
+/* ── Chat timeouts ─────────────────────────────────────── */
+export const chatMutes = {
+  until: (streamId: string, userId: string) => db.chatMutes.get(`${streamId}>${userId}`),
+  isMuted: (streamId: string, userId: string) => {
+    const until = db.chatMutes.get(`${streamId}>${userId}`);
+    return Boolean(until && Date.parse(until) > Date.now());
+  },
+  set: (streamId: string, userId: string, until: string) => db.chatMutes.set(`${streamId}>${userId}`, until),
+  clear: (streamId: string, userId: string) => db.chatMutes.delete(`${streamId}>${userId}`),
+};
+
 /* ── Notifications ─────────────────────────────────────── */
+type NotificationListener = (n: AppNotification) => void;
+const notificationListeners: NotificationListener[] = [];
+/** Delivery (live banner, push) subscribes here, so every notification created anywhere is delivered the same way. */
+export function onNotification(listener: NotificationListener): void {
+  notificationListeners.push(listener);
+}
 export const notifications = {
   forUser: (userId: string) => db.notifications.get(userId) ?? [],
   create: (notification: AppNotification) => {
@@ -280,6 +675,13 @@ export const notifications = {
     list.unshift(notification);
     if (list.length > 120) list.splice(120);
     db.notifications.set(notification.userId, list);
+    for (const listener of notificationListeners) {
+      try {
+        listener(notification);
+      } catch {
+        /* delivery must never break the action that created the notification */
+      }
+    }
     return notification;
   },
   markAllRead: (userId: string) => {
@@ -381,6 +783,31 @@ const COLLECTIONS = [
    * provisioned a second account for the same person.
    */
   'oauthIdentities',
+  'categoryRequests',
+  'settings',
+  'aiSpend',
+  'audit',
+  'presStaff',
+  'presPosts',
+  'presChat',
+  'boardMeetings',
+  'verifications',
+  'pushDevices',
+  'broadcasts',
+  'addresses',
+  'follows',
+  'blocks',
+  'reports',
+  'chatMutes',
+  'giveaways',
+  'tips',
+  'watchlists',
+  'wallets',
+  'offers',
+  'clips',
+  'dms',
+  'referrals',
+  'promos',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PageHeader, Section } from '@/components/site-shell';
 import {
   Avatar,
@@ -33,6 +33,11 @@ import {
   UsersIcon,
 } from '@/components/icons';
 import { api } from '@/lib/api';
+import { LiveVideoCard } from '@/components/LiveVideoCard';
+import { BoardroomPanel } from '@/components/Boardroom';
+import { AuditPanel, OverviewStrip, PresidentPanel, ProvidersPanel, SettingsPanel } from '@/components/OwnerConsole';
+import { MessagesPanel, SellerChecksPanel } from '@/components/Messages';
+import { CountriesPanel, ReportsPanel } from '@/components/Countries';
 import { useAuctions, useStreams } from '@/lib/hooks';
 import { formatMoney, formatViewers, pct } from '@/lib/format';
 import { MONETIZATION } from '@moneymart/tokens';
@@ -47,6 +52,22 @@ const FLAGS = [
   { key: 'tv_apps', label: 'TV & IPTV apps', on: false, hint: 'Phase 3 — Q3 2027' },
 ];
 
+type ConsoleTab = 'overview' | 'president' | 'boardroom' | 'messages' | 'sellers' | 'countries' | 'reports' | 'settings' | 'providers' | 'audit';
+/** Console tabs that sit under a differently named server grant. */
+const SERVER_TAB: Partial<Record<ConsoleTab, string>> = { boardroom: 'president', messages: 'notifications', countries: 'settings', reports: 'tickets' };
+const CONSOLE_TABS: { id: ConsoleTab; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'president', label: 'President' },
+  { id: 'boardroom', label: 'Boardroom' },
+  { id: 'messages', label: 'Messages' },
+  { id: 'sellers', label: 'Seller checks' },
+  { id: 'countries', label: 'Countries' },
+  { id: 'reports', label: 'Reports' },
+  { id: 'settings', label: 'Settings' },
+  { id: 'providers', label: 'Providers' },
+  { id: 'audit', label: 'Audit' },
+];
+
 export default function AdminPage() {
   const user = useSession((state) => state.user);
   const users = useSession((state) => state.users);
@@ -58,6 +79,10 @@ export default function AdminPage() {
   );
   const [message, setMessage] = useState<string | null>(null);
   const [killTarget, setKillTarget] = useState<string | null>(null);
+  const me = useQuery({ queryKey: ['admin', 'me'], queryFn: api.adminMe, retry: false, enabled: Boolean(user) });
+  const [tab, setTab] = useState<ConsoleTab>('overview');
+  const tabs = CONSOLE_TABS.filter((entry) => entry.id === 'overview' || me.data?.tabs.includes(SERVER_TAB[entry.id] ?? entry.id));
+
 
   const endStream = useMutation({
     mutationFn: (streamId: string) => api.endStream(streamId),
@@ -73,7 +98,7 @@ export default function AdminPage() {
   const gmv = lots.reduce((sum, lot) => sum + (lot.currentBid || lot.startingPrice), 0);
   const platformRevenue = gmv * MONETIZATION.creatorPlatformShare;
 
-  if (user?.role !== 'admin' && user?.id !== 'usr_house') {
+  if (!me.data && user?.role !== 'admin' && user?.id !== 'usr_house') {
     return (
       <Section>
         <EmptyState
@@ -106,6 +131,39 @@ export default function AdminPage() {
         }
       />
 
+      <div className="mb-6 flex flex-wrap gap-2" role="tablist">
+        {tabs.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === entry.id}
+            onClick={() => setTab(entry.id)}
+            className="rounded-full border px-4 py-1.5 text-[12.5px] font-semibold transition-colors"
+            style={
+              tab === entry.id
+                ? { borderColor: 'var(--mm-gold)', background: 'rgba(245,166,35,0.1)', color: 'var(--mm-gold)' }
+                : { borderColor: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.65)' }
+            }
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'president' && <PresidentPanel />}
+      {tab === 'boardroom' && <BoardroomPanel />}
+      {tab === 'messages' && <MessagesPanel />}
+      {tab === 'sellers' && <SellerChecksPanel />}
+      {tab === 'countries' && <CountriesPanel />}
+      {tab === 'reports' && <ReportsPanel />}
+      {tab === 'settings' && <SettingsPanel owner={me.data?.role === 'owner'} />}
+      {tab === 'providers' && <ProvidersPanel />}
+      {tab === 'audit' && <AuditPanel />}
+
+      {tab === 'overview' && (
+      <>
+      {me.data ? <OverviewStrip /> : null}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatBlock label="Platform GMV (open)" value={formatMoney(gmv, 'USD', { compact: true })} tone="gold" icon={<ChartIcon size={15} />} />
         <StatBlock
@@ -208,6 +266,8 @@ export default function AdminPage() {
               <p className="text-[12.5px] text-white/50">No live streams right now.</p>
             )}
           </Card>
+
+          <LiveVideoCard />
 
           {/* Financial reporting */}
           <Card className="p-5">
@@ -348,6 +408,9 @@ export default function AdminPage() {
           ))}
         </div>
       </div>
+
+      </>
+      )}
 
       <ToastStack>
         {message ? <Toast tone="green" title="Admin action" body={message} onDismiss={() => setMessage(null)} /> : null}

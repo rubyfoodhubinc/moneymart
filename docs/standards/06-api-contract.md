@@ -1,0 +1,60 @@
+# 6. API contract
+
+All JSON. Identity comes from the app's session (bearer token). Console routes return **404** to anyone without access to the tab.
+
+## 6.1 Console
+
+| Method | Path | Tab | Body | Returns |
+|---|---|---|---|---|
+| GET | `/api/admin/me` | any seat | — | `{ role, tabs[], email, president }` |
+| GET | `/api/admin/overview` | overview | — | `{ today, week, month, approvalsWaiting }` (each period: numbers now and previous, members, sellers, activity, `aiCost`) |
+| GET | `/api/admin/providers` | providers | — | `{ ai: [{ id, label, configured }], seats: [{ name, provider, model, backup? }], prices, cost30d: { usd, calls, unpriced[] } }` |
+| GET | `/api/admin/settings` | settings | — | `{ settings: [{ key, label, group, value, defaultValue }] }` |
+| PUT | `/api/admin/settings` | settings | `{ changes: [{ key, value }] }` | `{ ok, changed[] }` · 400 `{ error: 'invalid', detail }` · 403 `owner_only` for `ai.*` by non-owners |
+| GET | `/api/admin/audit?limit=` | audit | — | `{ entries[] }` |
+
+## 6.2 President
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/admin/president` | — | `{ name, configured, staff[], approvals[], reports[], requests[], recent[], threads[] }` |
+| GET | `/api/admin/president/chat?thread=` | — | `{ lines[] }` |
+| POST | `/api/admin/president/chat` | `{ text, thread? }` | `{ reply: line, approvalsWaiting }` |
+| POST | `/api/admin/president/decide/:id` | `{ decision: 'approve' \| 'deny' }` | `{ ok, post }` · 404 `not_found` · 409 `already_decided` or apply failure |
+| POST | `/api/admin/president/briefing` | — | `{ post, emailed }` |
+
+All `/api/admin/president*` routes are owner-only.
+
+## 6.2a Boardroom (owner only, since v1.1)
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/admin/boardroom` | — | `{ meetings[] }` (without lines, with `lineCount`) |
+| GET | `/api/admin/boardroom/:id` | — | `{ meeting }` — poll while `speaking` is set |
+| POST | `/api/admin/boardroom` | `{ topic, staffIds? }` (one id = private room) | 201 `{ meeting }` · 400 `{ error }` |
+| POST | `/api/admin/boardroom/:id/say` | `{ text }` | `{ meeting }` · 409 `busy` / `closed` |
+| POST | `/api/admin/boardroom/:id/close` | — | `{ meeting }` with `minutesPostId` · 409 |
+
+## 6.3 Local AI
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/<local_ai>/status` | — | `{ enabled, available, president, voice }` |
+| POST | `/api/<local_ai>/chat` | `{ text, history?: [{ role: 'member' \| 'ore', text }], attachments?: [{ name, mediaType, data (base64) }], voice?: boolean }` | `{ reply, reported: [{ id, title }] }` · 400 `bad_attachment` (`detail` says why) · 401 `sign_in` · 503 `ore_off` / `ore_unavailable` |
+| POST | `/api/<local_ai>/speak` | `{ text }` | `audio/mpeg` (header `x-ore-voice: cartesia \| elevenlabs`) · 204 no voice · 429 |
+
+Optional header `x-<app>-platform: ios | android | web` is recorded on reported requests.
+
+## 6.4 Environment
+
+| Variable | Purpose |
+|---|---|
+| `<APP>_OWNER_EMAILS` | Comma-separated owner emails |
+| `ANTHROPIC_PRESIDENT_API_KEY` | President, staff, boardroom |
+| `ANTHROPIC_API_KEY` | Local AI and everything else |
+| `OPENAI_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY`, `Z_AI_API_KEY` | Other seats |
+| `CARTESIA_API_KEY`, `ELEVENLABS_API_KEY` | Voice |
+| `<APP>_DIRECTIVE_SECRET` | Signs directives and hashes member refs |
+| `RESEND_API_KEY`, `RESEND_FROM` | Briefing and owner email |
+| `DIDIT_API_KEY`, `DIDIT_KYC_WORKFLOWID_KEY` (people), `DIDIT_KYB_WORKFLOWID_KEY` (businesses), `DIDIT_WEBHOOK_SECRET` | Identity and business verification |
+| `<APP>_ANTHROPIC_BASE` | Test stand-in base URL |

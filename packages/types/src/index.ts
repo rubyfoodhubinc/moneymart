@@ -38,6 +38,13 @@ export interface User {
    * because that is the only place a preference can survive a restart.
    */
   preferences?: UserPreferences;
+  /**
+   * Seller onboarding answers and the return address shipping is quoted from.
+   * Private to the account owner: never part of the public profile.
+   */
+  sellerProfile?: SellerProfile;
+  /** Seller vacation mode: no new listings, shows or offers while on. */
+  vacation?: { on: boolean; message?: string; until?: ISODate };
   createdAt: ISODate;
   lastLoginAt?: ISODate;
 }
@@ -62,6 +69,46 @@ export interface UserPreferences {
    * which is the same defect as a toggle that does not save.
    */
   interests?: string[];
+}
+
+export type SellerEntity = 'individual' | 'business';
+export type SellerBusinessType = 'reseller' | 'liquidator' | 'brand' | 'retailer' | 'consignment' | 'other';
+
+export interface PostalAddress {
+  fullName: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  region: string;
+  postalCode: string;
+  countryCode: string;
+}
+
+/** Seller onboarding answers (bands are stored as the option id the client showed). */
+export interface SellerProfile {
+  entity: SellerEntity;
+  businessType?: SellerBusinessType;
+  mainCategory: string;
+  subcategories: string[];
+  channels: string[];
+  socials: Record<string, string>;
+  monthlyRevenue?: string;
+  inventorySize?: string;
+  teamSize?: string;
+  weeklyLiveHours?: string;
+  returnAddress: PostalAddress;
+  completedAt: ISODate;
+  updatedAt: ISODate;
+}
+
+/** A seller's request for a category the taxonomy does not have yet. */
+export interface CategoryRequest {
+  id: string;
+  userId: string;
+  name: string;
+  parentId?: string;
+  note?: string;
+  createdAt: ISODate;
 }
 
 /** Resolved preferences, with the documented defaults filled in. */
@@ -119,6 +166,36 @@ export interface Auction {
   /** Watchlist count for social proof */
   watchers: number;
   featured?: boolean;
+  /** Live show item: no extra time for late bids — the clock never moves. */
+  suddenDeath?: boolean;
+  /** Buy It Now stock: units offered (default 1) and units sold so far. */
+  quantity?: number;
+  quantitySold?: number;
+}
+
+/** A buyer's shipping address. */
+export interface BuyerAddress extends PostalAddress {
+  id: string;
+  phone?: string;
+  isDefault: boolean;
+  createdAt: ISODate;
+}
+
+export type ReportKind = 'user' | 'listing' | 'show' | 'message';
+export interface SafetyReport {
+  id: string;
+  reporterId: string;
+  kind: ReportKind;
+  targetId: string;
+  /** For a message: the show it was said in. */
+  contextId?: string;
+  reason: string;
+  note?: string;
+  status: 'open' | 'actioned' | 'dismissed';
+  createdAt: ISODate;
+  resolvedAt?: ISODate;
+  resolvedBy?: string;
+  resolution?: string;
 }
 
 export type BidStatus = 'pending' | 'accepted' | 'rejected' | 'outbid' | 'winning';
@@ -164,11 +241,62 @@ export interface StreamPlayback {
   updatedAt: ISODate;
 }
 
+export type ShowFormat = 'auction' | 'buy_now' | 'mixed';
+
+export type LiveVideoProviderId = 'ivs' | 'cloudflare';
+
+export interface StreamVideoRoom {
+  provider: LiveVideoProviderId;
+  roomId: string;
+  /** Cloudflare WHIP ingest URL — a broadcast credential. */
+  whipUrl?: string;
+  whepUrl?: string;
+  createdAt: ISODate;
+}
+
+/** Platform-wide live video choice, switched by staff from the admin dashboard. */
+export interface LiveVideoSettings {
+  primary: LiveVideoProviderId;
+  /** Try the other provider when the primary cannot open a room. */
+  autoFallback: boolean;
+  updatedAt?: ISODate;
+  updatedBy?: string;
+  lastFailover?: { at: ISODate; from: LiveVideoProviderId; to: LiveVideoProviderId; reason: string; showId: string };
+}
+
+export interface ShowShipping {
+  /** Buyers may collect in person instead of paying for shipping. */
+  freePickup: boolean;
+  /** Most a buyer pays in shipping across everything they win in this show. */
+  shippingCap?: number;
+}
+export type ShowVisibility = 'public' | 'private';
+
 export interface Stream {
   id: string;
   creatorId: string;
   title: string;
   category: string;
+  subcategory?: string;
+  description?: string;
+  format?: ShowFormat;
+  visibility?: ShowVisibility;
+  /** BCP-47 tag of the language the host will speak. */
+  language?: string;
+  createdAt?: ISODate;
+  /** Shows created together from one schedule share a series id. */
+  seriesId?: string;
+  /** Accounts the host trusts to moderate chat. */
+  moderatorIds?: string[];
+  /** Host-only: chat messages containing these words are held back. */
+  mutedWords?: string[];
+  /** The host flagged mature content; viewers see a warning first. */
+  explicit?: boolean;
+  shipping?: ShowShipping;
+  /** Host-private: accounts to notify when the show goes live. */
+  reminderUserIds?: string[];
+  /** Host-private: the live video room this show broadcasts through. */
+  video?: StreamVideoRoom;
   scheduledStartTime: ISODate;
   actualStartTime?: ISODate;
   endTime?: ISODate;
@@ -192,6 +320,8 @@ export interface ChatMessage {
   body: string;
   isPinned: boolean;
   isCreator: boolean;
+  /** Sent by one of the show's moderators. */
+  isModerator?: boolean;
   createdAt: ISODate;
 }
 
@@ -211,6 +341,20 @@ export interface Order {
   currency: CurrencyCode;
   paymentStatus: PaymentStatus;
   shippingAddress?: Address;
+  /** Who the parcel goes to (snapshot of the buyer's default address when the order was made). */
+  shipToName?: string;
+  /** How shipping was worked out, e.g. "Combined with your other items from this show". */
+  shippingNote?: string;
+  /** Show the order came from, so shipping can be combined per show. */
+  streamId?: string;
+  /** What was sold, for orders with no listing behind them (a Prize Drop). */
+  title?: string;
+  /** How the order came about when it was not a bid or Buy It Now. */
+  source?: 'offer' | 'prize_drop';
+  paidAt?: ISODate;
+  shippedAt?: ISODate;
+  /** MoneyMart credit the buyer used on this order (already taken off totalAmount). */
+  creditApplied?: number;
   trackingNumber?: string;
   courierName?: string;
   orderStatus: OrderStatus;
@@ -272,7 +416,15 @@ export type BidRejectionReason =
   | 'self_bid'
   | 'rate_limited'
   /** The caller is not signed in, or the session token was rejected. */
-  | 'not_authenticated';
+  | 'not_authenticated'
+  /** No shipping address on the account yet — the app asks for it before the first bid or buy. */
+  | 'shipping_info_required'
+  /** The seller has blocked this member. */
+  | 'blocked'
+  /** Every unit of this Buy It Now listing has sold. */
+  | 'sold_out'
+  /** MoneyMart is not open for buying in the buyer's country yet. */
+  | 'country_closed';
 
 export interface BidPlacedPayload {
   auction: AuctionWithRelations;
@@ -292,6 +444,8 @@ export interface BidRejectedPayload {
 export interface AuctionWonPayload {
   auction: AuctionWithRelations;
   winnerId: string;
+  /** Public handle of the winner, for "X won!" in the live room. */
+  winnerHandle?: string;
   hammerPrice: number;
   buyersPremium: number;
   total: number;
@@ -365,8 +519,12 @@ export interface ServerToClientEvents {
   'stream:viewers': (payload: { streamId: string; viewerCount: number }) => void;
   'stream:item': (payload: { streamId: string; auctionId?: string; nextInQueue: number }) => void;
   'stream:ended': (payload: { streamId: string; totalGMV: number }) => void;
+  /** The host started broadcasting; viewers waiting on the show should join the video. */
+  'stream:started': (payload: { streamId: string; liveVideoProvider: LiveVideoProviderId }) => void;
   'chat:message': (payload: ChatMessage) => void;
   'chat:pin': (payload: { streamId: string; message: ChatMessage | null }) => void;
+  /** A host or moderator removed a message. */
+  'chat:removed': (payload: { streamId: string; messageId: string }) => void;
   'notification': (payload: AppNotification) => void;
 }
 

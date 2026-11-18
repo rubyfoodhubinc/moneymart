@@ -5,6 +5,20 @@
 import { MONETIZATION, currency as currencyMeta, fxToUSD, type CurrencyCode } from '@moneymart/tokens';
 import type { CostBreakdown } from '@moneymart/types';
 
+/**
+ * USD value of one unit of each currency. Starts from the built-in table and is refreshed by `engine/markets.ts`
+ * from a live source when one is reachable, so conversions follow the market without a deploy.
+ */
+const liveFx: Record<string, number> = { ...fxToUSD };
+let fxUpdatedAt: string | null = null;
+export function setFxRates(rates: Record<string, number>, at: string): void {
+  for (const [code, usd] of Object.entries(rates)) if (Number.isFinite(usd) && usd > 0) liveFx[code] = usd;
+  fxUpdatedAt = at;
+}
+export function fxRates(): { rates: Record<string, number>; updatedAt: string | null } {
+  return { rates: { ...liveFx }, updatedAt: fxUpdatedAt };
+}
+
 export function isLuxury(categoryId?: string): boolean {
   if (!categoryId) return false;
   return (MONETIZATION.luxuryCategories as readonly string[]).includes(categoryId);
@@ -58,7 +72,7 @@ export function taxRate(countryCode: string): number {
   }
 }
 
-/** Flat-zone shipping quote; replaced by DHL/FedEx/GIG integrations in production. */
+/** Flat-zone shipping quote IN US DOLLARS; callers convert to the listing's currency. Replaced by carrier rates later. */
 export function shippingQuote(
   countryCode: string,
   crossBorder: boolean,
@@ -118,7 +132,7 @@ export function costBreakdown(params: {
   const buyersPremium = round2(hammerPrice * rate);
   const crossBorder = buyerCountry !== sellerCountry;
   const shipping = includeShipping
-    ? params.shipping ?? shippingQuote(buyerCountry, crossBorder, hammerPrice)
+    ? params.shipping ?? convert(shippingQuote(buyerCountry, crossBorder, convert(hammerPrice, currency, 'USD')), 'USD', currency)
     : 0;
   const taxable = hammerPrice + buyersPremium;
   const tax = round2(taxable * taxRate(buyerCountry));
@@ -155,8 +169,8 @@ export function sellerNet(hammerPrice: number, categoryId?: string): { gross: nu
 
 export function convert(amount: number, from: CurrencyCode, to: CurrencyCode): number {
   if (from === to) return amount;
-  const usd = amount * (fxToUSD[from] ?? 1);
-  return round2(usd / (fxToUSD[to] ?? 1));
+  const usd = amount * (liveFx[from] ?? 1);
+  return round2(usd / (liveFx[to] ?? 1));
 }
 
 export function formatMoney(

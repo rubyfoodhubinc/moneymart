@@ -17,6 +17,10 @@ import { Server as SocketServer } from 'socket.io';
 import type {
   AuctionWithRelations,
   ClientToServerEvents,
+  LiveVideoSettings,
+  PostalAddress,
+  SellerProfile,
+  Stream,
   Item,
   Order,
   PublicProfile,
@@ -25,7 +29,7 @@ import type {
   User,
 } from '@moneymart/types';
 import { DEFAULT_USER_PREFERENCES, type UserPreferences } from '@moneymart/types';
-import { categories } from '@moneymart/tokens';
+import { categories, categoryTree, isCategory, isSubcategoryOf } from '@moneymart/tokens';
 import { ANTI_SNIPE, ITEM_TIMER, categoryLabel } from './lib/labels.js';
 import { engine, type EngineEvent } from './engine/auctionEngine.js';
 import { money } from './engine/money.js';
@@ -39,9 +43,22 @@ import { subscriptionsService, ENTITLEMENTS } from './engine/subscriptions.js';
 import { authService, deliveryConfigured } from './engine/auth.js';
 import { oauthService } from './engine/oauth.js';
 import { resolveStreamPlayback } from './engine/playback.js';
+import {
+  LIVE_VIDEO_PROVIDERS,
+  LiveVideoError,
+  PROVIDER_LABELS,
+  closeRoom,
+  createRoomWithFallback,
+  hostCredentials,
+  isConfigured as liveVideoConfigured,
+  viewerCredentials,
+  type LiveVideoProviderId,
+} from './engine/liveVideo.js';
 import { validateImage, validateImages, MAX_IMAGES } from './lib/images.js';
 import {
   auctions,
+  categoryRequests,
+  settings,
   chat,
   items,
   notifications,
@@ -54,6 +71,20 @@ import {
   storefronts,
 } from './store.js';
 import { seed, reseed } from './seed.js';
+import { mountAiRoutes, startAiCompany } from './ai/routes.js';
+import { startDelivery, deliveryStatus } from './engine/notify.js';
+import { VerificationError, handleWebhook, refreshCheck, startCheck, verifyWebhook, viewFor, webhookConfigured } from './engine/verification.js';
+import { pushDevices, follows } from './store.js';
+import { canModerate, mayChat, mountCommunityRoutes } from './community.js';
+import { joinLine, mountEngagementRoutes } from './engagement.js';
+import { claimBlocker, endVacations, isPromoted, listingBlocker, mountGrowthRoutes, onOrderPaid } from './growth.js';
+import { feeRateFor } from './engine/commission.js';
+import { setSellerFeeResolver } from './engine/escrow.js';
+import { canSellIn, marketOf, startRates } from './engine/markets.js';
+
+/** The country a seller sells from: their return address, else their account. */
+const sellerCountry = (user: User) => (user.sellerProfile?.returnAddress?.countryCode ?? user.countryCode ?? '').toUpperCase();
+import { valueOf as settingValue } from './ai/registry.js';
 
 const PORT = Number(process.env.PORT ?? 4317);
 const app = express();
@@ -253,7 +284,15 @@ app.use(cors({ origin: corsOrigin, credentials: true }));
  * ceiling is 3 MB of raw bytes, which is roughly 4 MB once base64-encoded, so a
  * full gallery needs headroom well beyond the old 2 MB.
  */
-app.use(express.json({ limit: '16mb' }));
+app.use(
+  express.json({
+    limit: '16mb',
+    // Didit signs the exact bytes it sent; keep them for that one route.
+    verify: (req, _res, buf) => {
+      if ((req as Request).url?.startsWith('/api/webhooks/didit')) (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  }),
+);
 
 /**
  * Rate limiting.
@@ -272,6 +311,11 @@ app.use('/api/webhooks', rateLimit(POLICIES.webhook));
 const io = new SocketServer<ClientToServerEvents, ServerToClientEvents>(http, {
   cors: { origin: corsOrigin, credentials: true },
   path: '/socket.io',
+});
+
+/* Every notification created anywhere reaches open apps live and, when allowed, the member's phone. */
+startDelivery((room, _event, payload) => {
+  io.to(room).emit('notification', payload as Parameters<ServerToClientEvents['notification']>[0]);
 });
 
 /**
@@ -379,11 +423,25 @@ function expandAuction(auctionId: string): AuctionWithRelations | null {
   };
 }
 
+/** Public web address of a show; the app opens `moneymart://stream/<id>`. */
+function showShareUrl(streamId: string): string {
+  const base = (process.env.MM_PUBLIC_WEB_URL ?? 'https://www.moneymart.app').replace(/\/+$/, '');
+  return `${base}/stream/${encodeURIComponent(streamId)}`;
+}
+
 function expandStream(streamId: string) {
   const stream = streams.get(streamId);
   if (!stream) return null;
+  // Who asked for a reminder and which words are muted are the host's business only.
+  const { reminderUserIds, mutedWords: _muted, video, ...visible } = stream;
+  const live = stream.status === 'live' && video;
   return {
-    ...stream,
+    ...visible,
+    /** Which live video service carries this show; clients pick the matching player. */
+    liveVideoProvider: video?.provider,
+    reminderCount: reminderUserIds?.length ?? 0,
+    shareUrl: showShareUrl(stream.id),
+    moderators: (stream.moderatorIds ?? []).map((id) => publicProfile(id)),
     creator: publicProfile(stream.creatorId),
     activeAuction: stream.activeAuctionId ? (expandAuction(stream.activeAuctionId) ?? undefined) : undefined,
     queuedCount: stream.itemQueue.length,
@@ -392,13 +450,16 @@ function expandStream(streamId: string) {
      * and whether it is a real broadcast. An unresolvable stored URL becomes a
      * labelled demo rather than a dead player.
      */
-    playback: resolveStreamPlayback({
-      streamId: stream.id,
-      status: stream.status,
-      storedUrl: stream.hlsUrl,
-      fallbackUrl: process.env.MM_DEMO_HLS_URL,
-      mediaBaseUrl: mediaBaseUrl(),
-    }),
+    // A real broadcast is joined through /watch, not an HLS URL.
+    playback: live
+      ? { mode: 'live' as const, label: 'Live now', updatedAt: store.iso() }
+      : resolveStreamPlayback({
+          streamId: stream.id,
+          status: stream.status,
+          storedUrl: stream.hlsUrl,
+          fallbackUrl: process.env.MM_DEMO_HLS_URL,
+          mediaBaseUrl: mediaBaseUrl(),
+        }),
   };
 }
 
@@ -435,15 +496,12 @@ function broadcast(events: EngineEvent[]): void {
           read: false,
           createdAt: store.iso(),
         });
-        io.to(`user:${event.userId}`).emit('notification', notification);
+        void notification; // delivered live and by push from notify.ts
         break;
       }
       case 'won': {
         io.to(`auction:${event.payload.auction.id}`).emit('auction:won', event.payload);
-        event.viewerIds.forEach((userId) => {
-          const notification = notifications.forUser(userId)[0];
-          if (notification) io.to(`user:${userId}`).emit('notification', notification);
-        });
+        // The winner's and seller's notifications are delivered by notify.ts when they are created.
         const streamId = event.payload.auction.streamId;
         if (streamId) {
           const stream = streams.get(streamId);
@@ -672,7 +730,9 @@ app.get('/api/auth/sessions', (req, res) => {
  */
 app.use((req: Request, res: Response, next: NextFunction) => {
   const token = bearerToken(req);
-  if (token && !authService.authenticate(token)) {
+  // RevenueCat sends its webhook secret as a Bearer value; it is not a member session, and the route checks it.
+  const isRevenueCatWebhook = req.path === '/api/webhooks/revenuecat';
+  if (token && !isRevenueCatWebhook && !authService.authenticate(token)) {
     res.status(401).json({ error: 'invalid_token', detail: 'The session token is expired or unknown.' });
     return;
   }
@@ -732,7 +792,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     const isSelfGated =
       req.path === '/api/session' ||
       req.path.startsWith('/api/dev/') ||
-      req.path.startsWith('/api/auth/oauth/');
+      req.path.startsWith('/api/auth/oauth/') ||
+      // Didit has no member session; the route refuses anything without a valid signature (and 503 without a secret).
+      req.path === '/api/webhooks/didit' ||
+      // RevenueCat checks its own Authorization secret; only exempt while that secret is configured, because the
+      // route accepts any caller when it is not.
+      (req.path === '/api/webhooks/revenuecat' && Boolean(process.env.REVENUECAT_WEBHOOK_SECRET));
 
     if (needsIdentity && !isSelfGated && !actorId(req)) {
       res.status(401).json({ error: 'not_authenticated', detail: 'Provide an Authorization: Bearer token.' });
@@ -859,11 +924,17 @@ app.get('/api/users/:handle', (req, res) => {
 /* ── REST: auctions & search ───────────────────────────────────────────── */
 
 app.get('/api/auctions', (req, res) => {
-  const { type, category, status, q, sort, limit } = req.query as Record<string, string | undefined>;
+  const { type, category, subcategory, seller, status, q, sort, limit } = req.query as Record<string, string | undefined>;
   let list = auctions.all().map((a) => expandAuction(a.id)).filter((a): a is AuctionWithRelations => Boolean(a));
 
   if (type) list = list.filter((a) => a.auctionType === type);
   if (category) list = list.filter((a) => a.item.categoryId === category);
+  if (subcategory) list = list.filter((a) => a.item.subcategoryId === subcategory);
+  if (seller) {
+    // `me` is the caller's own shop: the seller picks show items from it.
+    const sellerId = seller === 'me' ? actorId(req) : (users.findByHandle(seller)?.id ?? seller);
+    list = list.filter((a) => a.sellerId === sellerId);
+  }
   if (status === 'live') list = list.filter((a) => a.isLive);
   if (status === 'scheduled') list = list.filter((a) => a.status === 'scheduled');
   if (status === 'sold') list = list.filter((a) => a.status === 'sold');
@@ -972,6 +1043,32 @@ app.post('/api/auctions/:id/bids', (req, res) => {
   res.json({ ok: true, auction: expandAuction(req.params.id), bids: auctions.bids(req.params.id).slice(0, 40) });
 });
 
+/**
+ * Buy It Now. The buyer is the session's account (never a body field), and the
+ * sale settles through the same path as a won lot: order, escrow, fees, notices.
+ */
+app.post('/api/auctions/:id/buy-now', (req, res) => {
+  const buyer = actorId(req);
+  const user = users.get(buyer);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  const events = engine.buyItNow({ auctionId: req.params.id, buyerId: buyer, buyerHandle: user.handle });
+  if (!events.length) {
+    res.status(404).json({ error: 'auction_not_found' });
+    return;
+  }
+  broadcast(events);
+  const rejection = events.find((e) => e.type === 'rejected');
+  if (rejection && rejection.type === 'rejected') {
+    res.status(409).json(rejection.payload);
+    return;
+  }
+  const order = orders.all().find((o) => o.auctionId === req.params.id && o.buyerId === buyer);
+  res.json({ ok: true, auction: expandAuction(req.params.id), orderId: order?.id });
+});
+
 app.post('/api/auctions/:id/auto-bid', (req, res) => {
   const { maxAmount, increment, aggressive, bidderId } = req.body as {
     maxAmount: number;
@@ -1014,13 +1111,30 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     startingPrice: number;
     reservePrice?: number;
     buyItNowPrice?: number;
+    /** Buy It Now units for sale (1–999). */
+    quantity?: number;
     durationDays: number;
     sellerId?: string;
     images?: string[];
+    subcategoryId?: string;
   };
 
   if (!body.title || !body.startingPrice) {
     res.status(400).json({ error: 'title_and_starting_price_required' });
+    return;
+  }
+
+  /**
+   * The category must be one the taxonomy knows. An unknown id used to be stored
+   * verbatim and the listing then matched no category page, so it was invisible
+   * to every buyer browsing by category.
+   */
+  if (body.categoryId !== undefined && !isCategory(body.categoryId)) {
+    res.status(400).json({ error: 'unknown_category', detail: 'Pick a category from the list, or request a new one.' });
+    return;
+  }
+  if (body.subcategoryId !== undefined && !isSubcategoryOf(body.subcategoryId, body.categoryId ?? 'collectibles')) {
+    res.status(400).json({ error: 'unknown_subcategory', detail: 'That subcategory does not belong to the chosen category.' });
     return;
   }
 
@@ -1037,9 +1151,27 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     res.status(400).json({ error: 'invalid_images', detail: imageCheck.reason, maxImages: MAX_IMAGES });
     return;
   }
+  const quantity = body.quantity === undefined || body.quantity === null ? 1 : Number(body.quantity);
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
+    res.status(400).json({ error: 'invalid_quantity', detail: 'Quantity is a whole number from 1 to 999.' });
+    return;
+  }
+  if (quantity > 1 && !body.buyItNowPrice) {
+    res.status(400).json({ error: 'invalid_quantity', detail: 'More than one unit needs a Buy It Now price.' });
+    return;
+  }
 
   const sellerId = actorId(req, body.sellerId);
   const seller = users.require(sellerId);
+  if (!canSellIn(sellerCountry(seller))) {
+    res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(seller))?.name ?? sellerCountry(seller)} yet.` });
+    return;
+  }
+  const listingGate = listingBlocker(seller.id, body.categoryId);
+  if (listingGate) {
+    res.status(403).json({ error: listingGate.code, detail: listingGate.message, message: listingGate.message });
+    return;
+  }
   const now = Date.now();
   const itemId = store.nextId('itm');
   const auctionId = store.nextId('auc');
@@ -1051,6 +1183,7 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     title: body.title,
     description: body.description ?? '',
     categoryId: body.categoryId ?? 'collectibles',
+    subcategoryId: body.subcategoryId,
     condition: body.condition ?? 'good',
     images: imageCheck.values,
     authenticityStatus: 'pending',
@@ -1071,6 +1204,8 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     currentBid: 0,
     bidCount: 0,
     buyItNowPrice: body.buyItNowPrice,
+    quantity,
+    quantitySold: 0,
     startTime: store.iso(),
     endTime: new Date(endMs).toISOString(),
     status: body.auctionType === 'traditional' ? 'scheduled' : 'live',
@@ -1084,13 +1219,667 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
   res.status(201).json({ auction: expanded, item });
 });
 
+/* ── REST: categories ──────────────────────────────────────────────────── */
+
+/**
+ * The full taxonomy with live activity counts, so a picker can sort by
+ * popularity and a browse page can show where buyers are right now.
+ */
+app.get('/api/categories', (_req, res) => {
+  const liveViewers = new Map<string, number>();
+  const liveShows = new Map<string, number>();
+  for (const stream of streams.live()) {
+    liveViewers.set(stream.category, (liveViewers.get(stream.category) ?? 0) + stream.viewerCount);
+    liveShows.set(stream.category, (liveShows.get(stream.category) ?? 0) + 1);
+  }
+  const listingCounts = new Map<string, number>();
+  for (const auction of auctions.all()) {
+    if (!auctions.isLive(auction)) continue;
+    const item = items.get(auction.itemId);
+    if (!item) continue;
+    listingCounts.set(item.categoryId, (listingCounts.get(item.categoryId) ?? 0) + 1);
+    if (item.subcategoryId) listingCounts.set(item.subcategoryId, (listingCounts.get(item.subcategoryId) ?? 0) + 1);
+  }
+  res.json({
+    items: categoryTree.map((entry, order) => ({
+      ...entry,
+      order,
+      liveViewers: liveViewers.get(entry.id) ?? 0,
+      liveShows: liveShows.get(entry.id) ?? 0,
+      listings: listingCounts.get(entry.id) ?? 0,
+      subcategories: entry.subcategories.map((child) => ({ ...child, listings: listingCounts.get(child.id) ?? 0 })),
+    })),
+  });
+});
+
+/** A seller asks for a category the taxonomy lacks. Signed-in callers only. */
+app.post('/api/categories/requests', (req, res) => {
+  const userId = actorId(req);
+  if (!users.get(userId)) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const name = String(body.name ?? '').trim();
+  if (name.length < 2 || name.length > 60) {
+    res.status(400).json({ error: 'invalid_name', detail: 'A category name is 2–60 characters.' });
+    return;
+  }
+  const parentId = body.parentId === undefined || body.parentId === '' ? undefined : String(body.parentId);
+  if (parentId && !isCategory(parentId)) {
+    res.status(400).json({ error: 'unknown_category', detail: 'The parent category does not exist.' });
+    return;
+  }
+  // Bounded per user so the queue cannot be flooded.
+  if (categoryRequests.byUser(userId).length >= 20) {
+    res.status(429).json({ error: 'too_many_requests', detail: 'You have reached the limit of open category requests.' });
+    return;
+  }
+  const request = categoryRequests.create({
+    id: store.nextId('catreq'),
+    userId,
+    name,
+    parentId,
+    note: body.note === undefined ? undefined : String(body.note).trim().slice(0, 280),
+    createdAt: store.iso(),
+  });
+  res.status(201).json({ request });
+});
+
 /* ── REST: streams ─────────────────────────────────────────────────────── */
 
+/**
+ * Load a show the caller hosts.
+ *
+ * Starting an item and ending a show were open to any caller, so anyone could
+ * take over or shut down another seller's broadcast. Only the host may control a
+ * show. A non-host gets 404, like a missing show, so ids are not confirmed.
+ */
+function requireHost(req: Request, res: Response, streamId: string): Stream | null {
+  const stream = streams.get(streamId);
+  const actor = actorId(req);
+  if (!stream || !actor || stream.creatorId !== actor) {
+    res.status(404).json({ error: 'stream_not_found' });
+    return null;
+  }
+  return stream;
+}
+
+/* ── Live video: provider choice, go live, watch ─────────────────────── */
+
+function isStaff(userId: string): boolean {
+  return users.get(userId)?.role === 'admin';
+}
+
+const LIVE_VIDEO_KEY = 'liveVideo';
+
+/** Current platform choice. Defaults to IVS with Cloudflare as automatic backup. */
+function liveVideoSettings(): LiveVideoSettings {
+  const stored = settings.get<LiveVideoSettings>(LIVE_VIDEO_KEY);
+  const envPrimary = process.env.MM_LIVE_VIDEO_PRIMARY === 'cloudflare' ? 'cloudflare' : 'ivs';
+  return { primary: envPrimary, autoFallback: true, ...(stored ?? {}) };
+}
+
+function liveVideoStatus() {
+  const current = liveVideoSettings();
+  return {
+    ...current,
+    updatedByName: current.updatedBy ? users.get(current.updatedBy)?.displayName : undefined,
+    providers: LIVE_VIDEO_PROVIDERS.map((id) => ({
+      id,
+      label: PROVIDER_LABELS[id],
+      configured: liveVideoConfigured(id),
+      role: id === current.primary ? 'primary' : 'backup',
+    })),
+    liveShows: streams.live().filter((s) => s.video).map((s) => ({ id: s.id, title: s.title, provider: s.video!.provider })),
+  };
+}
+
+/* Owner console: President Ore's office, settings, audit; Ore in the app. */
+mountAiRoutes(app, (req) => actorId(req));
+/* Addresses, follows, blocks, reports and show moderation. */
+mountCommunityRoutes(app, (req) => actorId(req), (room, event, payload) => {
+  (io.to(room).emit as (e: string, p: unknown) => boolean)(event, payload);
+});
+const roomEmit = (room: string, event: string, payload: unknown) => {
+  (io.to(room).emit as (e: string, p: unknown) => boolean)(event, payload);
+};
+/* Wave B: Prize Drops, tips, reactions, Seller Studio, category feed, saved watchlist. */
+mountEngagementRoutes(app, { actorId: (req) => actorId(req), emit: roomEmit, expandStream, expandAuction });
+/* Wave C: coins, challenges, rewards, clubs, referrals, offers, clips, leaderboards, messages, policies, promotions, vacation. */
+mountGrowthRoutes(app, { actorId: (req) => actorId(req), emit: roomEmit, expandStream, expandAuction });
+setSellerFeeResolver((sellerId, categoryId) => feeRateFor(sellerId, categoryId));
+
+/** Staff only. 404 for everyone else, so the console's existence is not confirmed. */
+function requireStaff(req: Request, res: Response): string | null {
+  const userId = actorId(req);
+  if (!userId || !isStaff(userId)) {
+    res.status(404).json({ error: 'not_found' });
+    return null;
+  }
+  return userId;
+}
+
+app.get('/api/admin/live-video', (req, res) => {
+  if (!requireStaff(req, res)) return;
+  res.json(liveVideoStatus());
+});
+
+/**
+ * Switch the live video provider. Affects shows that go live from now on; a show
+ * already broadcasting keeps its provider (moving it would cut viewers off).
+ */
+app.put('/api/admin/live-video', (req, res) => {
+  const staffId = requireStaff(req, res);
+  if (!staffId) return;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const current = liveVideoSettings();
+  let primary = current.primary;
+  if (body.primary !== undefined) {
+    if (!LIVE_VIDEO_PROVIDERS.includes(body.primary as LiveVideoProviderId)) {
+      res.status(400).json({ error: 'unknown_provider', detail: 'Choose ivs or cloudflare.' });
+      return;
+    }
+    primary = body.primary as LiveVideoProviderId;
+    if (!liveVideoConfigured(primary)) {
+      res.status(409).json({ error: 'provider_not_configured', detail: `${PROVIDER_LABELS[primary]} has no credentials on the server yet.` });
+      return;
+    }
+  }
+  let autoFallback = current.autoFallback;
+  if (body.autoFallback !== undefined) {
+    if (typeof body.autoFallback !== 'boolean') {
+      res.status(400).json({ error: 'invalid_setting', detail: 'autoFallback must be true or false.' });
+      return;
+    }
+    autoFallback = body.autoFallback;
+  }
+  settings.set<LiveVideoSettings>(LIVE_VIDEO_KEY, { ...current, primary, autoFallback, updatedAt: store.iso(), updatedBy: staffId });
+  console.log(`[live-video] ${staffId} set primary=${primary} autoFallback=${autoFallback}`);
+  res.json(liveVideoStatus());
+});
+
+/** One go-live at a time per show, so a double tap cannot open two paid rooms. */
+const goLiveInFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * Start broadcasting. Opens the show's room on the platform's provider (falling
+ * back automatically when allowed) and returns the host's broadcast credentials.
+ * Calling again re-issues credentials for the same room. `useBackup` moves the
+ * show to the other provider — the host's escape hatch when their stream will not
+ * connect.
+ */
+app.post('/api/streams/:id/go-live', rateLimit(POLICIES.liveVideo), async (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.status === 'ended') {
+    res.status(409).json({ error: 'show_ended', detail: 'This show has ended. Schedule a new one.' });
+    return;
+  }
+  const previous = goLiveInFlight.get(stream.id);
+  if (previous) await previous.catch(() => undefined);
+
+  const useBackup = (req.body ?? {}).useBackup === true;
+  const work = (async () => {
+    let failedOver: { from: LiveVideoProviderId; reason: string } | undefined;
+    if (!stream.video || useBackup) {
+      const config = liveVideoSettings();
+      if (useBackup) {
+        const current = stream.video?.provider ?? config.primary;
+        const backup = LIVE_VIDEO_PROVIDERS.find((p) => p !== current)!;
+        if (!liveVideoConfigured(backup)) {
+          throw new LiveVideoError(backup, 'not_configured', `${PROVIDER_LABELS[backup]} is not configured, so there is no backup to switch to.`);
+        }
+        const opened = await createRoomWithFallback(backup, false, stream.id, stream.title);
+        if (stream.video) void closeRoom(stream.video);
+        stream.video = { ...opened.room };
+        failedOver = { from: current, reason: 'host_requested' };
+      } else {
+        const opened = await createRoomWithFallback(config.primary, config.autoFallback, stream.id, stream.title);
+        stream.video = { ...opened.room };
+        failedOver = opened.failedOver;
+      }
+      if (failedOver) {
+        settings.set<LiveVideoSettings>(LIVE_VIDEO_KEY, {
+          ...liveVideoSettings(),
+          lastFailover: { at: store.iso(), from: failedOver.from, to: stream.video.provider, reason: failedOver.reason, showId: stream.id },
+        });
+        console.warn(`[live-video] show ${stream.id} moved ${failedOver.from} → ${stream.video.provider} (${failedOver.reason})`);
+      }
+    }
+    const credentials = await hostCredentials(stream.video, stream.creatorId);
+    const firstStart = !stream.actualStartTime;
+    stream.status = 'live';
+    stream.actualStartTime = stream.actualStartTime ?? store.iso();
+    streams.save(stream);
+    if (firstStart) notifyShowLive(stream);
+    io.to(`stream:${stream.id}`).emit('stream:started', { streamId: stream.id, liveVideoProvider: stream.video.provider });
+    return { credentials, failedOver };
+  })();
+  goLiveInFlight.set(stream.id, work);
+  try {
+    const { credentials, failedOver } = await work;
+    res.json({ stream: hostView(stream.id), broadcast: credentials, failedOver });
+  } catch (error) {
+    const failure = error instanceof LiveVideoError ? error : new LiveVideoError('ivs', 'error', 'Live video failed');
+    res.status(503).json({ error: 'live_video_unavailable', provider: failure.provider, reason: failure.reason, detail: failure.message });
+  } finally {
+    if (goLiveInFlight.get(stream.id) === work) goLiveInFlight.delete(stream.id);
+  }
+});
+
+/** Join a live show's video. Open to anyone who can open the show, signed in or not. */
+app.get('/api/streams/:id/watch', rateLimit(POLICIES.liveVideo), async (req, res) => {
+  const stream = streams.get(req.params.id);
+  if (!stream) {
+    res.status(404).json({ error: 'stream_not_found' });
+    return;
+  }
+  if (stream.status !== 'live' || !stream.video) {
+    res.status(409).json({ error: 'not_live', detail: 'This show is not broadcasting right now.' });
+    return;
+  }
+  try {
+    const viewer = actorId(req);
+    res.json({ viewer: await viewerCredentials(stream.video, viewer && users.get(viewer) ? viewer : null) });
+  } catch (error) {
+    const failure = error instanceof LiveVideoError ? error : new LiveVideoError(stream.video.provider, 'error', 'Live video failed');
+    res.status(503).json({ error: 'live_video_unavailable', provider: failure.provider, reason: failure.reason, detail: failure.message });
+  }
+});
+
+const SHOW_FORMATS = ['auction', 'buy_now', 'mixed'] as const;
+const SHOW_TITLE_MAX = 150;
+
+/**
+ * Validate the editable fields of a show. Returns an error message, or null
+ * after writing the accepted values onto `target`.
+ */
+function applyShowFields(body: Record<string, unknown>, target: Partial<Stream>, creating: boolean, hostId = ''): string | null {
+  if (creating || body.title !== undefined) {
+    const title = String(body.title ?? '').trim();
+    if (title.length < 3 || title.length > SHOW_TITLE_MAX) return `A show title is 3–${SHOW_TITLE_MAX} characters.`;
+    target.title = title;
+  }
+  if (creating || body.categoryId !== undefined) {
+    if (!isCategory(body.categoryId)) return 'Pick a category from the list.';
+    target.category = body.categoryId;
+  }
+  if (body.subcategoryId !== undefined) {
+    const parent = target.category ?? '';
+    if (body.subcategoryId === null || body.subcategoryId === '') target.subcategory = undefined;
+    else if (!isSubcategoryOf(body.subcategoryId, parent)) return 'That subcategory does not belong to the chosen category.';
+    else target.subcategory = String(body.subcategoryId);
+  }
+  if (creating || body.scheduledStartTime !== undefined) {
+    const when = Date.parse(String(body.scheduledStartTime ?? ''));
+    if (!Number.isFinite(when)) return 'A show needs a valid start time.';
+    // A little slack for clock drift; a year ahead is the scheduling horizon.
+    if (when < Date.now() - 5 * 60_000) return 'A show cannot start in the past.';
+    if (when > Date.now() + 366 * 86_400_000) return 'A show can be scheduled up to a year ahead.';
+    target.scheduledStartTime = new Date(when).toISOString();
+  }
+  if (body.description !== undefined) target.description = String(body.description).trim().slice(0, 1000);
+  if (body.format !== undefined) {
+    if (!SHOW_FORMATS.includes(body.format as (typeof SHOW_FORMATS)[number])) return 'Format must be auction, buy_now or mixed.';
+    target.format = body.format as Stream['format'];
+  }
+  if (body.visibility !== undefined) {
+    if (body.visibility !== 'public' && body.visibility !== 'private') return 'Visibility must be public or private.';
+    target.visibility = body.visibility;
+  }
+  if (body.language !== undefined) {
+    const value = String(body.language).trim();
+    if (!LANGUAGE_TAG.test(value)) return 'A language must be a tag such as `en` or `es`.';
+    target.language = value;
+  }
+  if (body.moderators !== undefined) {
+    if (!Array.isArray(body.moderators) || body.moderators.length > 10) return 'Up to 10 moderators.';
+    const ids: string[] = [];
+    for (const raw of body.moderators) {
+      const handle = String(raw).trim().replace(/^@/, '');
+      const user = users.findByHandle(handle) ?? users.get(handle);
+      if (!user) return `No account called @${handle}.`;
+      if (user.id === hostId) continue;
+      if (!ids.includes(user.id)) ids.push(user.id);
+    }
+    target.moderatorIds = ids;
+  }
+  if (body.mutedWords !== undefined) {
+    if (!Array.isArray(body.mutedWords) || body.mutedWords.length > 50) return 'Up to 50 muted words.';
+    const words = body.mutedWords.map((w) => String(w).trim().toLowerCase()).filter(Boolean);
+    if (words.some((w) => w.length > 30)) return 'A muted word is at most 30 characters.';
+    target.mutedWords = [...new Set(words)];
+  }
+  if (body.explicit !== undefined) {
+    if (typeof body.explicit !== 'boolean') return 'explicit must be true or false.';
+    target.explicit = body.explicit;
+  }
+  if (body.shipping !== undefined) {
+    const raw = body.shipping as Record<string, unknown> | null;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'shipping must be an object.';
+    const freePickup = raw.freePickup === undefined ? false : raw.freePickup;
+    if (typeof freePickup !== 'boolean') return 'freePickup must be true or false.';
+    let shippingCap: number | undefined;
+    if (raw.shippingCap !== undefined && raw.shippingCap !== null && raw.shippingCap !== '') {
+      shippingCap = Number(raw.shippingCap);
+      if (!Number.isFinite(shippingCap) || shippingCap < 0 || shippingCap > 1000) return 'A shipping cap is between 0 and 1,000.';
+      shippingCap = Math.round(shippingCap * 100) / 100;
+    }
+    target.shipping = { freePickup, shippingCap };
+  }
+  if (body.posterUrl !== undefined) {
+    if (body.posterUrl === null || body.posterUrl === '') target.posterUrl = '';
+    else {
+      const checked = validateImage(body.posterUrl);
+      if (!checked.ok) return `Thumbnail: ${checked.reason}`;
+      target.posterUrl = checked.value;
+    }
+  }
+  return null;
+}
+
+/**
+ * Create (schedule) a show. The caller becomes the host. A seller must finish
+ * seller onboarding first: the return address is what shipping is quoted from,
+ * so a show without one could not sell anything.
+ */
+app.post('/api/streams', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  if (!user.sellerProfile) {
+    res.status(403).json({ error: 'seller_profile_required', detail: 'Finish seller setup (including your return address) before scheduling a show.' });
+    return;
+  }
+  if (!canSellIn(sellerCountry(user))) {
+    res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(user))?.name ?? sellerCountry(user)} yet.` });
+    return;
+  }
+  if (user.vacation?.on) {
+    res.status(403).json({ error: 'on_vacation', detail: 'You’re on vacation. Turn vacation mode off to schedule shows.' });
+    return;
+  }
+  if (settingValue<boolean>('sellers.verification_required') && user.verificationStatus !== 'verified') {
+    res.status(403).json({ error: 'verification_required', detail: 'Verify your identity in Selling › Verification before scheduling a show.' });
+    return;
+  }
+  const upcoming = streams.byCreator(userId).filter((s) => s.status !== 'ended');
+  if (upcoming.length >= 50) {
+    res.status(429).json({ error: 'too_many_shows', detail: 'You can have up to 50 upcoming shows.' });
+    return;
+  }
+  const draft: Partial<Stream> = {};
+  const problem = applyShowFields((req.body ?? {}) as Record<string, unknown>, draft, true, userId);
+  if (problem) {
+    res.status(400).json({ error: 'invalid_show', detail: problem });
+    return;
+  }
+  const stream = buildShow(user, draft);
+  streams.create(stream);
+  res.status(201).json({ stream: hostView(stream.id) });
+});
+
+/** A new scheduled show from validated fields. */
+function buildShow(user: User, draft: Partial<Stream>, seriesId?: string): Stream {
+  return {
+    id: store.nextId('str'),
+    creatorId: user.id,
+    seriesId,
+    moderatorIds: draft.moderatorIds ?? [],
+    mutedWords: draft.mutedWords ?? [],
+    explicit: draft.explicit ?? false,
+    shipping: draft.shipping ?? { freePickup: false },
+    reminderUserIds: [],
+    title: draft.title!,
+    category: draft.category!,
+    subcategory: draft.subcategory,
+    description: draft.description,
+    format: draft.format ?? 'auction',
+    visibility: draft.visibility ?? 'public',
+    language: draft.language ?? preferencesFor(user).language,
+    createdAt: store.iso(),
+    scheduledStartTime: draft.scheduledStartTime!,
+    status: 'scheduled',
+    viewerCount: 0,
+    peakViewerCount: 0,
+    // No broadcast yet: playback resolves to "offline" until the host goes live.
+    hlsUrl: '',
+    posterUrl: draft.posterUrl ?? '',
+    itemQueue: [],
+    totalGMV: 0,
+    chatEnabled: true,
+  };
+}
+
+/** The host's own view of a show: the public shape plus their muted words. */
+function hostView(streamId: string) {
+  const stream = streams.get(streamId);
+  const expanded = expandStream(streamId);
+  if (!stream || !expanded) return null;
+  return { ...expanded, mutedWords: stream.mutedWords ?? [] };
+}
+
+/**
+ * Schedule a run of shows in one step (the guided scheduler's "every Tuesday and
+ * Thursday for two weeks"). All-or-nothing: one bad time refuses the whole batch,
+ * so a seller never ends up with half a schedule.
+ */
+app.post('/api/streams/batch', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  if (!user.sellerProfile) {
+    res.status(403).json({ error: 'seller_profile_required', detail: 'Finish seller setup (including your return address) before scheduling a show.' });
+    return;
+  }
+  if (!canSellIn(sellerCountry(user))) {
+    res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(user))?.name ?? sellerCountry(user)} yet.` });
+    return;
+  }
+  if (user.vacation?.on) {
+    res.status(403).json({ error: 'on_vacation', detail: 'You’re on vacation. Turn vacation mode off to schedule shows.' });
+    return;
+  }
+  if (settingValue<boolean>('sellers.verification_required') && user.verificationStatus !== 'verified') {
+    res.status(403).json({ error: 'verification_required', detail: 'Verify your identity in Selling › Verification before scheduling a show.' });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const times = Array.isArray(body.startTimes) ? body.startTimes.map(String) : [];
+  if (times.length < 1 || times.length > 20) {
+    res.status(400).json({ error: 'invalid_schedule', detail: 'Choose between 1 and 20 show times.' });
+    return;
+  }
+  const upcoming = streams.byCreator(userId).filter((s) => s.status !== 'ended').length;
+  if (upcoming + times.length > 50) {
+    res.status(429).json({ error: 'too_many_shows', detail: 'You can have up to 50 upcoming shows.' });
+    return;
+  }
+  const show = (typeof body.show === 'object' && body.show !== null ? body.show : {}) as Record<string, unknown>;
+  const drafts: Partial<Stream>[] = [];
+  for (const time of times) {
+    const draft: Partial<Stream> = {};
+    const problem = applyShowFields({ ...show, scheduledStartTime: time }, draft, true, userId);
+    if (problem) {
+      res.status(400).json({ error: 'invalid_show', detail: problem, at: time });
+      return;
+    }
+    drafts.push(draft);
+  }
+  const sorted = drafts.map((d) => Date.parse(d.scheduledStartTime!)).sort((a, b) => a - b);
+  if (sorted.some((t, i) => i > 0 && t - sorted[i - 1]! < 30 * 60_000)) {
+    res.status(400).json({ error: 'invalid_schedule', detail: 'Shows must be at least 30 minutes apart.' });
+    return;
+  }
+  const seriesId = times.length > 1 ? store.nextId('ser') : undefined;
+  const created = drafts.map((draft) => {
+    const stream = buildShow(user, draft, seriesId);
+    streams.create(stream);
+    return hostView(stream.id);
+  });
+  res.status(201).json({ streams: created, seriesId });
+});
+
+/**
+ * Save a show and be notified when it goes live. Any signed-in viewer except the
+ * host; only while the show is still scheduled.
+ */
+app.post('/api/streams/:id/remind', (req, res) => {
+  const userId = actorId(req);
+  if (!users.get(userId)) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  // A private show is reachable by its link, so whoever holds the link may save it.
+  const stream = streams.get(req.params.id);
+  if (!stream) {
+    res.status(404).json({ error: 'stream_not_found' });
+    return;
+  }
+  if (stream.creatorId === userId) {
+    res.status(400).json({ error: 'own_show', detail: 'You are hosting this show.' });
+    return;
+  }
+  if (stream.status !== 'scheduled') {
+    res.status(409).json({ error: 'show_not_scheduled', detail: 'Reminders are for shows that have not started.' });
+    return;
+  }
+  const on = (req.body ?? {}).on !== false;
+  const list = new Set(stream.reminderUserIds ?? []);
+  if (on) list.add(userId);
+  else list.delete(userId);
+  stream.reminderUserIds = [...list].slice(0, 100_000);
+  streams.save(stream);
+  res.json({ ok: true, reminded: on, reminderCount: stream.reminderUserIds.length });
+});
+
+/** Edit a show that has not started. */
+app.patch('/api/streams/:id', (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.status !== 'scheduled') {
+    res.status(409).json({ error: 'show_not_editable', detail: 'Only a show that has not started can be edited.' });
+    return;
+  }
+  const draft: Partial<Stream> = { category: stream.category };
+  const problem = applyShowFields((req.body ?? {}) as Record<string, unknown>, draft, false, stream.creatorId);
+  if (problem) {
+    res.status(400).json({ error: 'invalid_show', detail: problem });
+    return;
+  }
+  // A category change drops a subcategory that no longer belongs to it.
+  if (draft.category !== stream.category && draft.subcategory === undefined) stream.subcategory = undefined;
+  Object.assign(stream, draft);
+  streams.save(stream);
+  res.json({ stream: hostView(stream.id) });
+});
+
+/** Cancel a show that has not started. */
+app.delete('/api/streams/:id', (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.status !== 'scheduled') {
+    res.status(409).json({ error: 'show_not_cancellable', detail: 'A show that has started is ended, not cancelled.' });
+    return;
+  }
+  stream.status = 'ended';
+  stream.endTime = store.iso();
+  stream.itemQueue = [];
+  streams.save(stream);
+  res.json({ ok: true, stream: expandStream(stream.id) });
+});
+
+/** The caller's own shows, upcoming first, then past. */
+app.get('/api/me/streams', (req, res) => {
+  const userId = actorId(req);
+  if (!users.get(userId)) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  const mine = streams.byCreator(userId).map((s) => hostView(s.id)!).filter(Boolean);
+  const upcoming = mine.filter((s) => s.status !== 'ended').sort((a, b) => Date.parse(a.scheduledStartTime) - Date.parse(b.scheduledStartTime));
+  const past = mine.filter((s) => s.status === 'ended').sort((a, b) => Date.parse(b.endTime ?? b.scheduledStartTime) - Date.parse(a.endTime ?? a.scheduledStartTime));
+  res.json({ upcoming, past });
+});
+
+/**
+ * Put one of the host's own listings into the show's run order. A listing can be
+ * queued in one open show at a time, so a sale cannot happen twice.
+ */
+app.post('/api/streams/:id/items', (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.status === 'ended') {
+    res.status(409).json({ error: 'show_ended' });
+    return;
+  }
+  const auctionId = String((req.body ?? {}).auctionId ?? '');
+  const auction = auctions.get(auctionId);
+  if (!auction || auction.sellerId !== stream.creatorId) {
+    res.status(404).json({ error: 'listing_not_found', detail: 'Only your own listings can be added to your show.' });
+    return;
+  }
+  if (auction.status === 'sold' || auction.status === 'ended' || auction.status === 'cancelled') {
+    res.status(409).json({ error: 'listing_closed', detail: 'That listing has already closed.' });
+    return;
+  }
+  if (stream.itemQueue.includes(auction.id)) {
+    res.json({ ok: true, stream: expandStream(stream.id) });
+    return;
+  }
+  const elsewhere = streams.byCreator(stream.creatorId).find((s) => s.id !== stream.id && s.status !== 'ended' && s.itemQueue.includes(auction.id));
+  if (elsewhere) {
+    res.status(409).json({ error: 'listing_in_other_show', detail: `That listing is already in "${elsewhere.title}".` });
+    return;
+  }
+  if (stream.itemQueue.length >= 500) {
+    res.status(409).json({ error: 'queue_full', detail: 'A show can hold up to 500 items.' });
+    return;
+  }
+  stream.itemQueue.push(auction.id);
+  auction.streamId = stream.id;
+  auctions.save(auction);
+  streams.save(stream);
+  res.status(201).json({ ok: true, stream: expandStream(stream.id) });
+});
+
+/** Take a listing out of the run order (not while it is the item on screen). */
+app.delete('/api/streams/:id/items/:auctionId', (req, res) => {
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
+  if (stream.activeAuctionId === req.params.auctionId && stream.status === 'live') {
+    res.status(409).json({ error: 'item_on_screen', detail: 'That item is running now.' });
+    return;
+  }
+  stream.itemQueue = stream.itemQueue.filter((id) => id !== req.params.auctionId);
+  const auction = auctions.get(req.params.auctionId);
+  if (auction && auction.streamId === stream.id) {
+    auction.streamId = undefined;
+    auctions.save(auction);
+  }
+  streams.save(stream);
+  res.json({ ok: true, stream: expandStream(stream.id) });
+});
+
 app.get('/api/streams', (req, res) => {
-  const { status } = req.query as { status?: string };
-  let list = streams.all().map((s) => expandStream(s.id)).filter(Boolean);
+  const { status, following, creator } = req.query as { status?: string; following?: string; creator?: string };
+  // A private show is reachable by its link, never listed.
+  let list = streams.all().filter((s) => s.visibility !== 'private').map((s) => expandStream(s.id)).filter(Boolean);
   if (status) list = list.filter((s) => s!.status === status);
-  list.sort((a, b) => b!.viewerCount - a!.viewerCount);
+  if (following === '1') {
+    const ids = new Set(follows.following(actorId(req)));
+    list = list.filter((s) => ids.has(s!.creatorId));
+  }
+  if (creator) list = list.filter((s) => s!.creatorId === creator);
+  // Promoted shows lead, then the busiest.
+  list.sort((a, b) => Number(isPromoted('stream', b!.id)) - Number(isPromoted('stream', a!.id)) || b!.viewerCount - a!.viewerCount);
   res.json({ items: list, total: list.length });
 });
 
@@ -1100,8 +1889,10 @@ app.get('/api/streams/:id', (req, res) => {
     res.status(404).json({ error: 'stream_not_found' });
     return;
   }
+  const viewer = actorId(req);
   res.json({
     stream,
+    reminded: Boolean(viewer && streams.get(req.params.id)?.reminderUserIds?.includes(viewer)),
     chat: chat.get(req.params.id),
     queue: stream.itemQueue
       .map((id) => expandAuction(id))
@@ -1110,19 +1901,69 @@ app.get('/api/streams/:id', (req, res) => {
 });
 
 app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
-  const stream = streams.get(req.params.id);
+  const stream = requireHost(req, res, req.params.id);
+  if (!stream) return;
   const auction = auctions.get(req.params.auctionId);
-  if (!stream || !auction) {
+  // Only an item from this show's own run order can be put on screen.
+  if (!auction || !stream.itemQueue.includes(auction.id) || auction.sellerId !== stream.creatorId) {
     res.status(404).json({ error: 'not_found' });
     return;
   }
+  if (auction.status === 'sold' || auction.status === 'ended' || auction.status === 'cancelled') {
+    res.status(409).json({ error: 'item_closed', detail: 'That item has already sold or closed.' });
+    return;
+  }
+  // One item on screen at a time: the current one must finish first.
+  const current = stream.activeAuctionId ? auctions.get(stream.activeAuctionId) : undefined;
+  if (current && current.id !== auction.id && current.status === 'live' && Date.parse(current.endTime) > Date.now() && stream.video) {
+    res.status(409).json({ error: 'item_running', detail: 'Wait for the item on screen to finish.' });
+    return;
+  }
+
+  /**
+   * The host sets how the item runs: a 5–120 second clock, a starting price
+   * (only before anyone has bid), and optionally sudden death.
+   */
+  const options = (req.body ?? {}) as { seconds?: unknown; startingPrice?: unknown; suddenDeath?: unknown };
+  let seconds: number = ITEM_TIMER.default;
+  if (options.seconds !== undefined) {
+    const value = Number(options.seconds);
+    if (!Number.isInteger(value) || value < 5 || value > 120) {
+      res.status(400).json({ error: 'invalid_timer', detail: 'A timer is 5 to 120 seconds.' });
+      return;
+    }
+    seconds = value;
+  }
+  if (options.startingPrice !== undefined) {
+    const price = Number(options.startingPrice);
+    if (!Number.isFinite(price) || price < 1 || price > 1_000_000) {
+      res.status(400).json({ error: 'invalid_price', detail: 'A starting price is between 1 and 1,000,000.' });
+      return;
+    }
+    if (auction.bidCount > 0) {
+      res.status(409).json({ error: 'price_locked', detail: 'The starting price cannot change after bidding has begun.' });
+      return;
+    }
+    auction.startingPrice = money.round2(price);
+  }
+  if (options.suddenDeath !== undefined) {
+    if (typeof options.suddenDeath !== 'boolean') {
+      res.status(400).json({ error: 'invalid_option', detail: 'suddenDeath must be true or false.' });
+      return;
+    }
+    auction.suddenDeath = options.suddenDeath;
+  }
+
+  const firstStart = !stream.actualStartTime;
   stream.activeAuctionId = auction.id;
   stream.status = 'live';
   stream.actualStartTime = stream.actualStartTime ?? store.iso();
+  if (firstStart) notifyShowLive(stream);
   streams.save(stream);
   auction.status = 'live';
   auction.startTime = store.iso();
-  auction.endTime = new Date(Date.now() + ITEM_TIMER.default * 1000).toISOString();
+  auction.endTime = new Date(Date.now() + seconds * 1000).toISOString();
+  auction.streamId = stream.id;
   auctions.save(auction);
   io.to(`stream:${stream.id}`).emit('stream:item', {
     streamId: stream.id,
@@ -1132,11 +1973,37 @@ app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
   res.json({ ok: true, stream: expandStream(stream.id), auction: expandAuction(auction.id) });
 });
 
+/** Tell everyone who saved the show that it has started. Once per show. */
+function notifyShowLive(stream: Stream): void {
+  const host = users.get(stream.creatorId);
+  // People who saved the show, and everyone who follows the host (once each).
+  const audience = new Set([...(stream.reminderUserIds ?? []), ...(stream.visibility === 'private' ? [] : follows.followersOf(stream.creatorId))]);
+  for (const userId of audience) {
+    const notification = notifications.create({
+      id: store.nextId('ntf'),
+      userId,
+      category: 'streams',
+      title: `${host?.displayName ?? 'A seller you follow'} is live`,
+      body: stream.title,
+      href: `/stream/${stream.id}`,
+      read: false,
+      createdAt: store.iso(),
+    });
+    void notification; // delivered by notify.ts
+  }
+}
+
 app.post('/api/streams/:id/end', (req, res) => {
-  const stream = streams.get(req.params.id);
+  // Staff may end any show (the admin kill switch); everyone else only their own.
+  const staff = isStaff(actorId(req));
+  const stream = staff ? streams.get(req.params.id) : requireHost(req, res, req.params.id);
   if (!stream) {
-    res.status(404).json({ error: 'stream_not_found' });
+    if (staff) res.status(404).json({ error: 'stream_not_found' });
     return;
+  }
+  if (stream.video) {
+    void closeRoom(stream.video);
+    stream.video = undefined;
   }
   stream.status = 'ended';
   stream.endTime = store.iso();
@@ -1169,6 +2036,98 @@ app.post('/api/notifications/read', (req, res) => {
   if (id) notifications.markRead(actor, id);
   else notifications.markAllRead(actor);
   res.json({ ok: true, items: notifications.forUser(actor) });
+});
+
+/* ── REST: push devices ─────────────────────────────────────────────────── */
+
+/** Register this phone for push. The token is tied to the signed-in member only. */
+app.post('/api/devices', (req, res) => {
+  const userId = actorId(req);
+  if (!userId || !users.get(userId)) {
+    res.status(401).json({ error: 'sign_in' });
+    return;
+  }
+  const { token, env } = (req.body ?? {}) as { token?: string; env?: string };
+  if (typeof token !== 'string' || !/^[0-9a-fA-F]{64,200}$/.test(token)) {
+    res.status(400).json({ error: 'invalid_token' });
+    return;
+  }
+  if (pushDevices.forUser(userId).length >= 10) {
+    const oldest = pushDevices.forUser(userId).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
+    if (oldest) pushDevices.remove(oldest.token);
+  }
+  pushDevices.save({ token: token.toLowerCase(), userId, platform: 'ios', env: env === 'sandbox' ? 'sandbox' : 'production', updatedAt: store.iso() });
+  res.json({ ok: true, push: deliveryStatus().push });
+});
+
+app.delete('/api/devices/:token', (req, res) => {
+  const userId = actorId(req);
+  const token = String(req.params.token).toLowerCase();
+  const mine = pushDevices.forUser(userId).some((d) => d.token === token);
+  if (mine) pushDevices.remove(token);
+  res.json({ ok: true, removed: mine });
+});
+
+/* ── REST: seller identity checks (Didit) ───────────────────────────────── */
+
+function verificationError(res: Response, error: unknown): void {
+  if (error instanceof VerificationError) {
+    res.status(error.status).json({ error: error.code, detail: error.message });
+    return;
+  }
+  res.status(502).json({ error: 'provider_error', detail: 'The verification service did not answer. Try again in a moment.' });
+}
+
+app.get('/api/verification', (req, res) => {
+  const user = users.get(actorId(req));
+  if (!user) {
+    res.status(401).json({ error: 'sign_in' });
+    return;
+  }
+  res.json(viewFor(user));
+});
+
+app.post('/api/verification/start', async (req, res) => {
+  const user = users.get(actorId(req));
+  if (!user) {
+    res.status(401).json({ error: 'sign_in' });
+    return;
+  }
+  const { kind } = (req.body ?? {}) as { kind?: string };
+  try {
+    const { url } = await startCheck(user, kind === 'business' ? 'business' : kind === 'person' ? 'person' : undefined, process.env.MM_DIDIT_CALLBACK || undefined);
+    res.json({ url, verification: viewFor(users.get(user.id)!) });
+  } catch (error) {
+    verificationError(res, error);
+  }
+});
+
+app.post('/api/verification/refresh', async (req, res) => {
+  const user = users.get(actorId(req));
+  if (!user) {
+    res.status(401).json({ error: 'sign_in' });
+    return;
+  }
+  try {
+    await refreshCheck(user);
+    res.json(viewFor(users.get(user.id)!));
+  } catch (error) {
+    verificationError(res, error);
+  }
+});
+
+/** Didit status updates. Signed; the session must be one this server opened. */
+app.post('/api/webhooks/didit', (req, res) => {
+  if (!webhookConfigured()) {
+    res.status(503).json({ error: 'webhook_not_configured' });
+    return;
+  }
+  const raw = (req as Request & { rawBody?: Buffer }).rawBody;
+  if (!verifyWebhook(req.headers, raw, req.body)) {
+    res.status(401).json({ error: 'bad_signature' });
+    return;
+  }
+  res.json({ ok: true, ...handleWebhook((req.body ?? {}) as Record<string, unknown>) });
 });
 
 app.get('/api/orders', (req, res) => {
@@ -1214,10 +2173,28 @@ app.post('/api/orders/:id/status', (req, res) => {
     trackingNumber?: string;
     courierName?: string;
   };
+  const before = order.orderStatus;
   if (orderStatus) order.orderStatus = orderStatus;
+  if (orderStatus === 'shipped' && !order.shippedAt) order.shippedAt = store.iso();
   if (trackingNumber) order.trackingNumber = trackingNumber;
   if (courierName) order.courierName = courierName;
   orders.save(order);
+  if (order.orderStatus !== before && (order.orderStatus === 'shipped' || order.orderStatus === 'delivered')) {
+    const title = auctionTitleFor(order.auctionId);
+    const tracking = order.trackingNumber ? ` ${order.courierName ? `${order.courierName} ` : ''}tracking ${order.trackingNumber}.` : '';
+    notifications.create({
+      id: store.nextId('ntf'),
+      userId: order.buyerId,
+      category: 'orders',
+      title: order.orderStatus === 'shipped' ? 'Your order shipped' : 'Your order was delivered',
+      body: order.orderStatus === 'shipped'
+        ? `${title} is on its way.${tracking}`
+        : `${title} arrived. Check it, then confirm receipt to release payment to the seller.`,
+      href: `/orders/${order.id}`,
+      read: false,
+      createdAt: store.iso(),
+    });
+  }
   res.json({ ok: true, order });
 });
 
@@ -1474,7 +2451,8 @@ app.get('/api/tv/epg.xml', (_req, res) => {
   const stamp = (date: Date) =>
     `${date.toISOString().replace(/[-:]/g, '').split('.')[0]} +0000`;
 
-  const events = [...streams.all()].sort(
+  // Private shows are shared by link only, so they stay out of the public guide.
+  const events = streams.all().filter((s) => s.visibility !== 'private').sort(
     (a, b) => Date.parse(a.scheduledStartTime) - Date.parse(b.scheduledStartTime),
   );
 
@@ -1605,12 +2583,12 @@ app.post('/api/orders/:id/pay', async (req, res) => {
           : (req.body as { chargeAmountOverride?: number })?.chargeAmountOverride,
     });
     if (result.escrow.state === 'in_escrow') {
-      orders.save({ ...order, paymentStatus: 'paid', orderStatus: 'processing' });
+      onOrderPaid(orders.save({ ...order, paymentStatus: 'paid', orderStatus: 'processing', paidAt: store.iso() }));
     } else if (result.escrow.state === 'failed') {
       orders.save({ ...order, paymentStatus: 'failed' });
     }
     broadcast([]);
-    io.to(`user:${order.buyerId}`).emit('notification', notifications.create({
+    notifications.create({
       id: store.nextId('ntf'),
       userId: order.buyerId,
       category: 'orders',
@@ -1621,7 +2599,19 @@ app.post('/api/orders/:id/pay', async (req, res) => {
       href: `/orders/${order.id}`,
       read: false,
       createdAt: store.iso(),
-    }));
+    });
+    if (result.escrow.state === 'in_escrow') {
+      notifications.create({
+        id: store.nextId('ntf'),
+        userId: order.sellerId,
+        category: 'orders',
+        title: 'Paid — ready to ship',
+        body: `${auctionTitleFor(order.auctionId)} is paid and held safely. Ship it and add tracking so the buyer can confirm.`,
+        href: `/orders/${order.id}`,
+        read: false,
+        createdAt: store.iso(),
+      });
+    }
     res.json({
       intent: result.intent,
       escrow: result.escrow,
@@ -1680,6 +2670,11 @@ app.post('/api/orders/:id/dispute', (req, res) => {
   const order = orders.get(req.params.id);
   if (!order) {
     res.status(404).json({ error: 'order_not_found' });
+    return;
+  }
+  const claimClosed = claimBlocker(order);
+  if (claimClosed) {
+    res.status(409).json({ error: 'claim_window_closed', message: claimClosed });
     return;
   }
   try {
@@ -1838,25 +2833,27 @@ app.get('/api/wallet', (req, res) => {
 
 app.get('/api/me/earnings', (req, res) => {
   const userId = actorId(req, req.query.userId as string | undefined);
+  // Real sales only: no filler numbers.
   const selling = orders.selling(userId);
   const days = 30;
   const series = Array.from({ length: days }, (_, index) => {
     const date = new Date(Date.now() - (days - 1 - index) * 86_400_000);
+    const key = date.toISOString().slice(0, 10);
     const label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    const base = 120 + Math.round(Math.sin(index / 2.4) * 90 + (index % 7) * 24);
-    const spike = index % 9 === 0 ? 480 : 0;
-    return { label, value: base + spike };
+    const value = selling.filter((o) => o.createdAt.slice(0, 10) === key).reduce((sum, o) => sum + o.hammerPrice, 0);
+    return { label, value: money.round2(value) };
   });
-  const gmv = selling.reduce((sum, o) => sum + o.hammerPrice, 0) || 18420;
+  const gmv = money.round2(selling.reduce((sum, o) => sum + o.hammerPrice, 0));
   const split = money.creatorSplit(gmv);
+  const since = Date.now() - days * 86_400_000;
   res.json({
     series,
     gmv,
     creatorShare: split.creator,
     platformFee: split.platform,
-    itemsSold: selling.length || 14,
-    avgSalePrice: money.round2(gmv / (selling.length || 14)),
-    newFollowers: 214,
+    itemsSold: selling.length,
+    avgSalePrice: selling.length ? money.round2(gmv / selling.length) : 0,
+    newFollowers: [...store.db.follows.values()].filter((f) => f.sellerId === userId && Date.parse(f.at) >= since).length,
   });
 });
 
@@ -2269,6 +3266,123 @@ app.patch('/api/me', (req, res) => {
   });
 });
 
+/* ── Seller onboarding ─────────────────────────────────────────────────── */
+
+const SELLER_BUSINESS_TYPES = ['reseller', 'liquidator', 'brand', 'retailer', 'consignment', 'other'] as const;
+const SELLER_CHANNELS = ['website', 'social', 'store', 'marketplaces', 'none'] as const;
+const SOCIAL_NETWORKS = ['instagram', 'tiktok', 'youtube', 'twitch', 'x', 'facebook', 'other'] as const;
+const BAND = /^[a-z0-9_+-]{1,24}$/;
+
+function readAddress(raw: unknown): PostalAddress | string {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'A return address is required.';
+  const a = raw as Record<string, unknown>;
+  const text = (key: string, min: number, max: number) => {
+    const value = String(a[key] ?? '').trim();
+    return value.length >= min && value.length <= max ? value : null;
+  };
+  const fullName = text('fullName', 2, 80);
+  const line1 = text('line1', 3, 120);
+  const city = text('city', 2, 80);
+  const region = text('region', 1, 80);
+  const postalCode = text('postalCode', 2, 16);
+  const countryCode = String(a.countryCode ?? '').trim().toUpperCase();
+  if (!fullName) return 'Enter your legal name as it appears on your ID.';
+  if (!line1) return 'Enter the street address.';
+  if (/\b(p\.?\s*o\.?\s*box|post office box)\b/i.test(line1)) return 'A return address cannot be a PO box.';
+  if (!city) return 'Enter the city.';
+  if (!region) return 'Enter the state, province or region.';
+  if (!postalCode) return 'Enter the postal code.';
+  if (!/^[A-Z]{2}$/.test(countryCode)) return 'A country must be a two-letter ISO code.';
+  const line2 = a.line2 === undefined ? undefined : String(a.line2).trim().slice(0, 120) || undefined;
+  return { fullName, line1, line2, city, region, postalCode, countryCode };
+}
+
+/**
+ * Save seller onboarding. Becoming a seller is self-service; this records who the
+ * seller is and where they ship from. The address is private to the account.
+ */
+app.put('/api/me/seller-profile', (req, res) => {
+  const userId = actorId(req);
+  const user = users.get(userId);
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const fail = (detail: string) => res.status(400).json({ error: 'invalid_seller_profile', detail });
+
+  if (body.entity !== 'individual' && body.entity !== 'business') return void fail('Choose individual or registered business.');
+  let businessType: SellerProfile['businessType'];
+  if (body.businessType !== undefined && body.businessType !== null && body.businessType !== '') {
+    if (!SELLER_BUSINESS_TYPES.includes(body.businessType as (typeof SELLER_BUSINESS_TYPES)[number])) return void fail('Unknown business type.');
+    businessType = body.businessType as SellerProfile['businessType'];
+  }
+  if (body.entity === 'business' && !businessType) return void fail('Choose what best describes your business.');
+  if (!isCategory(body.mainCategory)) return void fail('Choose the category you will sell in most.');
+  const mainCategory = body.mainCategory;
+  const subs = Array.isArray(body.subcategories) ? body.subcategories.map(String) : [];
+  if (subs.some((id) => !isSubcategoryOf(id, mainCategory))) return void fail('A subcategory does not belong to your main category.');
+  const channels = Array.isArray(body.channels) ? body.channels.map(String) : [];
+  if (channels.some((c) => !SELLER_CHANNELS.includes(c as (typeof SELLER_CHANNELS)[number]))) return void fail('Unknown sales channel.');
+  const socials: Record<string, string> = {};
+  if (body.socials !== undefined) {
+    if (typeof body.socials !== 'object' || body.socials === null || Array.isArray(body.socials)) return void fail('socials must be an object.');
+    for (const [network, handle] of Object.entries(body.socials as Record<string, unknown>)) {
+      if (!SOCIAL_NETWORKS.includes(network as (typeof SOCIAL_NETWORKS)[number])) return void fail(`Unknown social network: ${network}`);
+      const value = String(handle ?? '').trim().replace(/^@/, '');
+      if (!value) continue;
+      if (!/^[A-Za-z0-9._-]{1,40}$/.test(value)) return void fail(`That ${network} username does not look right.`);
+      socials[network] = value;
+    }
+  }
+  const band = (key: string): string | undefined | false => {
+    const value = body[key];
+    if (value === undefined || value === null || value === '') return undefined;
+    return BAND.test(String(value)) ? String(value) : false;
+  };
+  const monthlyRevenue = band('monthlyRevenue');
+  const inventorySize = band('inventorySize');
+  const teamSize = band('teamSize');
+  const weeklyLiveHours = band('weeklyLiveHours');
+  if ([monthlyRevenue, inventorySize, teamSize, weeklyLiveHours].includes(false)) return void fail('An answer was not one of the offered options.');
+  const address = readAddress(body.returnAddress);
+  if (typeof address === 'string') return void fail(address);
+  if (!canSellIn(address.countryCode)) {
+    res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(address.countryCode)?.name ?? address.countryCode.toUpperCase()} yet.` });
+    return;
+  }
+
+  const now = store.iso();
+  const profile: SellerProfile = {
+    entity: body.entity,
+    businessType,
+    mainCategory,
+    subcategories: [...new Set(subs)].slice(0, 12),
+    channels: [...new Set(channels)],
+    socials,
+    monthlyRevenue: monthlyRevenue || undefined,
+    inventorySize: inventorySize || undefined,
+    teamSize: teamSize || undefined,
+    weeklyLiveHours: weeklyLiveHours || undefined,
+    returnAddress: address,
+    completedAt: user.sellerProfile?.completedAt ?? now,
+    updatedAt: now,
+  };
+  user.sellerProfile = profile;
+  if (user.role === 'buyer') user.role = 'seller';
+  users.upsert(user);
+  res.json({ ok: true, sellerProfile: profile, user });
+});
+
+app.get('/api/me/seller-profile', (req, res) => {
+  const user = users.get(actorId(req));
+  if (!user) {
+    res.status(401).json({ error: 'not_authenticated' });
+    return;
+  }
+  res.json({ sellerProfile: user.sellerProfile ?? null });
+});
+
 /** The caller's own account, including preferences the public profile omits. */
 app.get('/api/me', (req, res) => {
   const userId = actorId(req);
@@ -2568,6 +3682,8 @@ io.on('connection', (socket) => {
     stream.peakViewerCount = Math.max(stream.peakViewerCount, stream.viewerCount);
     streams.save(stream);
     io.to(`stream:${streamId}`).emit('stream:viewers', { streamId, viewerCount: stream.viewerCount });
+    const joinedId = socketUserId(socket);
+    if (joinedId) joinLine(streamId, joinedId, roomEmit);
   });
 
   socket.on('stream:leave', (streamId: string) => {
@@ -2583,6 +3699,18 @@ io.on('connection', (socket) => {
     const userId = socketUserId(socket);
     if (!userId) return;
     const author = users.get(userId);
+    const room = streams.get(payload.streamId);
+    const body = String(payload.body ?? '').slice(0, 400);
+    /**
+     * The host's muted words: a matching message is not stored or broadcast. The
+     * sender is not told, so the filter cannot be probed word by word.
+     */
+    // Blocked by the host, or timed out by the host or a moderator: not stored or broadcast.
+    if (!mayChat(room, userId)) return;
+    if (room?.mutedWords?.length && room.creatorId !== userId) {
+      const lower = body.toLowerCase();
+      if (room.mutedWords.some((word) => lower.includes(word))) return;
+    }
     // The author is the authenticated user, so a display name or creator badge
     // cannot be forged by the payload.
     const message = chat.addChat({
@@ -2590,9 +3718,10 @@ io.on('connection', (socket) => {
       streamId: payload.streamId,
       userId,
       displayName: author?.displayName ?? 'Member',
-      body: String(payload.body ?? '').slice(0, 400),
+      body,
       isPinned: false,
       isCreator: streams.get(payload.streamId)?.creatorId === userId,
+      isModerator: Boolean(room && room.creatorId !== userId && (room.moderatorIds ?? []).includes(userId)),
       createdAt: store.iso(),
     });
     io.to(`stream:${payload.streamId}`).emit('chat:message', message);
@@ -2600,9 +3729,8 @@ io.on('connection', (socket) => {
 
   socket.on('chat:pin', (payload) => {
     const userId = socketUserId(socket);
-    const owner = streams.get(payload.streamId)?.creatorId;
-    // Only the creator of the room may pin, or any viewer could control the room.
-    if (!userId || (owner && owner !== userId)) return;
+    // Only the host or the show's moderators may pin, or any viewer could control the room.
+    if (!userId || !canModerate(streams.get(payload.streamId), userId)) return;
     const list = chat.get(payload.streamId);
     const target = list.find((m) => m.id === payload.messageId) ?? null;
     chat.pin(payload.streamId, target?.id ?? null);
@@ -2624,6 +3752,7 @@ io.on('connection', (socket) => {
 
 /* ── Heartbeat: settle due auctions, push ticks, drift viewer counts ───── */
 
+setInterval(endVacations, 60_000);
 setInterval(() => {
   const due = engine.auctionsDueForSettlement();
   due.forEach((auction) => {
@@ -2644,8 +3773,14 @@ setInterval(() => {
 
 setInterval(() => {
   streams.live().forEach((stream) => {
-    const drift = Math.round((Math.random() - 0.42) * 24);
-    stream.viewerCount = Math.max(12, stream.viewerCount + drift);
+    if (stream.video) {
+      // A real broadcast: the count is the people actually in the room.
+      stream.viewerCount = io.sockets.adapter.rooms.get(`stream:${stream.id}`)?.size ?? 0;
+    } else {
+      // Seeded demo shows only (no broadcast behind them): keep the room feeling alive.
+      const drift = Math.round((Math.random() - 0.42) * 24);
+      stream.viewerCount = Math.max(12, stream.viewerCount + drift);
+    }
     stream.peakViewerCount = Math.max(stream.peakViewerCount, stream.viewerCount);
     streams.save(stream);
     io.to(`stream:${stream.id}`).emit('stream:viewers', { streamId: stream.id, viewerCount: stream.viewerCount });
@@ -2728,6 +3863,9 @@ if (shouldSeed(restoredRecords)) {
 
 persistence?.start();
 startLimiterSweep();
+startAiCompany();
+// Live exchange rates in production (or when asked); tests keep the fixed table so amounts are predictable.
+if (process.env.NODE_ENV === 'production' || process.env.MM_FX_SOURCE === 'live') startRates();
 
 /**
  * Expired codes and sessions are swept on an interval. Unref'd so the timer

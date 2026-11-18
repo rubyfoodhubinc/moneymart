@@ -117,6 +117,25 @@ export default function AuctionDetailPage() {
     }
   };
 
+  const [buying, setBuying] = useState(false);
+  const onBuyNow = async () => {
+    if (!auction?.buyItNowPrice) return;
+    const price = formatMoney(auction.buyItNowPrice, auction.currency);
+    if (!window.confirm(`Buy this item now for ${price}? All sales are final.`)) return;
+    setNotice(null);
+    setBuying(true);
+    try {
+      await api.buyNow(auction.id);
+      setNotice({ tone: 'green', title: 'It’s yours', body: `Bought for ${price}. Pay and choose shipping in your orders.` });
+      void detail.refetch();
+    } catch (error) {
+      const message = error instanceof ApiError ? error.message : 'Purchase failed';
+      setNotice({ tone: 'error', title: 'Could not buy', body: message });
+    } finally {
+      setBuying(false);
+    }
+  };
+
   const onAutoBid = async () => {
     if (!auction) return;
     setAutoOpen(false);
@@ -475,7 +494,14 @@ export default function AuctionDetailPage() {
                 />
               </div>
               {auction.buyItNowPrice ? (
-                <Button variant="green" full icon={<CheckIcon size={15} />}>
+                <Button
+                  variant="green"
+                  full
+                  icon={<CheckIcon size={15} />}
+                  loading={buying}
+                  disabled={closed || (auction.currentBid ?? 0) >= auction.buyItNowPrice}
+                  onClick={() => void onBuyNow()}
+                >
                   Buy it now · {formatMoney(auction.buyItNowPrice, auction.currency)}
                 </Button>
               ) : null}

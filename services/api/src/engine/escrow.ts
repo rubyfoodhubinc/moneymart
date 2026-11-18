@@ -27,8 +27,15 @@ import { money } from './money.js';
 import { orderEscrow, store } from '../store.js';
 
 /** Seller-side platform fee by category — mirrors the payout engine (§10). */
-function sellerFeeRate(categoryId?: string): number {
-  return money.isLuxury(categoryId) ? 0.12 : 0.1;
+type FeeResolver = (sellerId: string, categoryId?: string) => number | undefined;
+let feeResolver: FeeResolver | undefined;
+/** Tiered commission plugs in here; without it the flat category rate applies. */
+export function setSellerFeeResolver(resolver: FeeResolver): void {
+  feeResolver = resolver;
+}
+function sellerFeeRate(categoryId?: string, sellerId?: string): number {
+  const tiered = sellerId && feeResolver ? feeResolver(sellerId, categoryId) : undefined;
+  return tiered ?? (money.isLuxury(categoryId) ? 0.12 : 0.1);
 }
 
 export class EscrowError extends Error {
@@ -121,7 +128,7 @@ function amountDue(order: Order): number {
 
 /** What the seller receives once the buyer confirms, after platform fees. */
 export function sellerNetFor(order: Order, categoryId?: string): number {
-  const fee = money.round2(order.hammerPrice * sellerFeeRate(categoryId));
+  const fee = money.round2(order.hammerPrice * sellerFeeRate(categoryId, order.sellerId));
   return money.round2(order.hammerPrice - fee);
 }
 
@@ -202,15 +209,28 @@ export async function payOrder(params: {
     return { intent: confirmed, escrow: failed };
   }
 
+  // MoneyMart credit the buyer used is funded by MoneyMart and held alongside the card charge,
+  // so the seller's full payout is always covered by what escrow holds.
+  const credit = money.round2(order.creditApplied ?? 0);
   const held = orderEscrow.save({
     ...record,
-    heldAmount: money.round2(record.heldAmount + chargeAmount),
+    heldAmount: money.round2(record.heldAmount + chargeAmount + credit),
     provider: provider.id,
     chargeId: confirmed.id,
   });
 
-  const inEscrow = transition(held, 'in_escrow', actorId, `Funds held: ${order.currency} ${chargeAmount}`);
+  const inEscrow = transition(held, 'in_escrow', actorId, `Funds held: ${order.currency} ${chargeAmount}${credit ? ` + ${credit} MoneyMart credit` : ''}`);
   return { intent: { ...confirmed, orderId: order.id }, escrow: inEscrow };
+}
+
+/**
+ * Nothing to charge (a Prize Drop the seller gives away): the invoice is settled at zero so the normal
+ * ship → confirm path works and the seller is paid nothing.
+ */
+export function markPrepaid(order: Order, actorId: string, note: string): EscrowRecord {
+  let record = requireEscrow(order.id);
+  record = transition(record, 'processing', actorId, note);
+  return transition(record, 'in_escrow', actorId, `${note}: nothing to pay`);
 }
 
 /** Step 2 — the seller marks the lot shipped (does not release funds). */
@@ -233,6 +253,7 @@ export function markShipped(params: {
   const updated: Order = {
     ...order,
     orderStatus: 'shipped',
+    shippedAt: order.shippedAt ?? store.iso(),
     trackingNumber: params.trackingNumber ?? order.trackingNumber,
     courierName: params.courierName ?? order.courierName,
   };
