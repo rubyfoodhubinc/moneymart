@@ -46,6 +46,9 @@ struct AuctionDetailView: View {
         .task { await controller.load() }
         .onDisappear { controller.detach() }
         .sheet(isPresented: $showBid) { BidSheet(controller: controller).presentationDetents([.medium, .large]) }
+        .sheet(isPresented: Binding(get: { controller.needsShippingInfo && !showBid }, set: { if !$0 { controller.needsShippingInfo = false } })) {
+            ShippingInfoSheet { Task { await controller.resumeAfterShippingInfo() } }
+        }
     }
 
     private func content(_ auction: Auction) -> some View {
@@ -128,6 +131,9 @@ struct AuctionDetailView: View {
                         .font(MM.Font.data(34)).foregroundStyle(MM.Color.gold)
                         .contentTransition(.numericText()).animation(.snappy, value: auction.currentBid)
                         .accessibilityIdentifier("lot-price")
+                    if let approx = Markets.shared.approx(auction.hammerPrice ?? auction.displayPrice, from: auction.currency, to: SessionStore.viewerCurrency) {
+                        Text(approx).font(MM.Font.body(13, weight: .medium)).foregroundStyle(MM.Color.ink2).accessibilityIdentifier("lot-price-approx")
+                    }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 6) {
@@ -364,6 +370,15 @@ struct BidSheet: View {
             .navigationTitle("Place a bid")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            // First bid without an address: ask here, since this sheet is on top.
+            .sheet(isPresented: Binding(get: { controller.needsShippingInfo }, set: { if !$0 { controller.needsShippingInfo = false } })) {
+                ShippingInfoSheet {
+                    Task {
+                        await controller.resumeAfterShippingInfo()
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 

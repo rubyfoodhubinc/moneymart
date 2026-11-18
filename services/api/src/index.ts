@@ -74,7 +74,12 @@ import { seed, reseed } from './seed.js';
 import { mountAiRoutes, startAiCompany } from './ai/routes.js';
 import { startDelivery, deliveryStatus } from './engine/notify.js';
 import { VerificationError, handleWebhook, refreshCheck, startCheck, verifyWebhook, viewFor, webhookConfigured } from './engine/verification.js';
-import { pushDevices } from './store.js';
+import { pushDevices, follows } from './store.js';
+import { canModerate, mayChat, mountCommunityRoutes } from './community.js';
+import { canSellIn, marketOf, startRates } from './engine/markets.js';
+
+/** The country a seller sells from: their return address, else their account. */
+const sellerCountry = (user: User) => (user.sellerProfile?.returnAddress?.countryCode ?? user.countryCode ?? '').toUpperCase();
 import { valueOf as settingValue } from './ai/registry.js';
 
 const PORT = Number(process.env.PORT ?? 4317);
@@ -1102,6 +1107,8 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     startingPrice: number;
     reservePrice?: number;
     buyItNowPrice?: number;
+    /** Buy It Now units for sale (1–999). */
+    quantity?: number;
     durationDays: number;
     sellerId?: string;
     images?: string[];
@@ -1140,9 +1147,22 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     res.status(400).json({ error: 'invalid_images', detail: imageCheck.reason, maxImages: MAX_IMAGES });
     return;
   }
+  const quantity = body.quantity === undefined || body.quantity === null ? 1 : Number(body.quantity);
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
+    res.status(400).json({ error: 'invalid_quantity', detail: 'Quantity is a whole number from 1 to 999.' });
+    return;
+  }
+  if (quantity > 1 && !body.buyItNowPrice) {
+    res.status(400).json({ error: 'invalid_quantity', detail: 'More than one unit needs a Buy It Now price.' });
+    return;
+  }
 
   const sellerId = actorId(req, body.sellerId);
   const seller = users.require(sellerId);
+  if (!canSellIn(sellerCountry(seller))) {
+    res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(seller))?.name ?? sellerCountry(seller)} yet.` });
+    return;
+  }
   const now = Date.now();
   const itemId = store.nextId('itm');
   const auctionId = store.nextId('auc');
@@ -1175,6 +1195,8 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     currentBid: 0,
     bidCount: 0,
     buyItNowPrice: body.buyItNowPrice,
+    quantity,
+    quantitySold: 0,
     startTime: store.iso(),
     endTime: new Date(endMs).toISOString(),
     status: body.auctionType === 'traditional' ? 'scheduled' : 'live',
@@ -1306,6 +1328,10 @@ function liveVideoStatus() {
 
 /* Owner console: President Ore's office, settings, audit; Ore in the app. */
 mountAiRoutes(app, (req) => actorId(req));
+/* Addresses, follows, blocks, reports and show moderation. */
+mountCommunityRoutes(app, (req) => actorId(req), (room, event, payload) => {
+  (io.to(room).emit as (e: string, p: unknown) => boolean)(event, payload);
+});
 
 /** Staff only. 404 for everyone else, so the console's existence is not confirmed. */
 function requireStaff(req: Request, res: Response): string | null {
@@ -1552,6 +1578,10 @@ app.post('/api/streams', (req, res) => {
     res.status(403).json({ error: 'seller_profile_required', detail: 'Finish seller setup (including your return address) before scheduling a show.' });
     return;
   }
+  if (!canSellIn(sellerCountry(user))) {
+    res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(user))?.name ?? sellerCountry(user)} yet.` });
+    return;
+  }
   if (settingValue<boolean>('sellers.verification_required') && user.verificationStatus !== 'verified') {
     res.status(403).json({ error: 'verification_required', detail: 'Verify your identity in Selling › Verification before scheduling a show.' });
     return;
@@ -1626,6 +1656,10 @@ app.post('/api/streams/batch', (req, res) => {
   }
   if (!user.sellerProfile) {
     res.status(403).json({ error: 'seller_profile_required', detail: 'Finish seller setup (including your return address) before scheduling a show.' });
+    return;
+  }
+  if (!canSellIn(sellerCountry(user))) {
+    res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(user))?.name ?? sellerCountry(user)} yet.` });
     return;
   }
   if (settingValue<boolean>('sellers.verification_required') && user.verificationStatus !== 'verified') {
@@ -1810,10 +1844,15 @@ app.delete('/api/streams/:id/items/:auctionId', (req, res) => {
 });
 
 app.get('/api/streams', (req, res) => {
-  const { status } = req.query as { status?: string };
+  const { status, following, creator } = req.query as { status?: string; following?: string; creator?: string };
   // A private show is reachable by its link, never listed.
   let list = streams.all().filter((s) => s.visibility !== 'private').map((s) => expandStream(s.id)).filter(Boolean);
   if (status) list = list.filter((s) => s!.status === status);
+  if (following === '1') {
+    const ids = new Set(follows.following(actorId(req)));
+    list = list.filter((s) => ids.has(s!.creatorId));
+  }
+  if (creator) list = list.filter((s) => s!.creatorId === creator);
   list.sort((a, b) => b!.viewerCount - a!.viewerCount);
   res.json({ items: list, total: list.length });
 });
@@ -1911,7 +1950,9 @@ app.post('/api/streams/:id/items/:auctionId/activate', (req, res) => {
 /** Tell everyone who saved the show that it has started. Once per show. */
 function notifyShowLive(stream: Stream): void {
   const host = users.get(stream.creatorId);
-  for (const userId of stream.reminderUserIds ?? []) {
+  // People who saved the show, and everyone who follows the host (once each).
+  const audience = new Set([...(stream.reminderUserIds ?? []), ...(stream.visibility === 'private' ? [] : follows.followersOf(stream.creatorId))]);
+  for (const userId of audience) {
     const notification = notifications.create({
       id: store.nextId('ntf'),
       userId,
@@ -2760,25 +2801,27 @@ app.get('/api/wallet', (req, res) => {
 
 app.get('/api/me/earnings', (req, res) => {
   const userId = actorId(req, req.query.userId as string | undefined);
+  // Real sales only: no filler numbers.
   const selling = orders.selling(userId);
   const days = 30;
   const series = Array.from({ length: days }, (_, index) => {
     const date = new Date(Date.now() - (days - 1 - index) * 86_400_000);
+    const key = date.toISOString().slice(0, 10);
     const label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    const base = 120 + Math.round(Math.sin(index / 2.4) * 90 + (index % 7) * 24);
-    const spike = index % 9 === 0 ? 480 : 0;
-    return { label, value: base + spike };
+    const value = selling.filter((o) => o.createdAt.slice(0, 10) === key).reduce((sum, o) => sum + o.hammerPrice, 0);
+    return { label, value: money.round2(value) };
   });
-  const gmv = selling.reduce((sum, o) => sum + o.hammerPrice, 0) || 18420;
+  const gmv = money.round2(selling.reduce((sum, o) => sum + o.hammerPrice, 0));
   const split = money.creatorSplit(gmv);
+  const since = Date.now() - days * 86_400_000;
   res.json({
     series,
     gmv,
     creatorShare: split.creator,
     platformFee: split.platform,
-    itemsSold: selling.length || 14,
-    avgSalePrice: money.round2(gmv / (selling.length || 14)),
-    newFollowers: 214,
+    itemsSold: selling.length,
+    avgSalePrice: selling.length ? money.round2(gmv / selling.length) : 0,
+    newFollowers: [...store.db.follows.values()].filter((f) => f.sellerId === userId && Date.parse(f.at) >= since).length,
   });
 });
 
@@ -3272,6 +3315,10 @@ app.put('/api/me/seller-profile', (req, res) => {
   if ([monthlyRevenue, inventorySize, teamSize, weeklyLiveHours].includes(false)) return void fail('An answer was not one of the offered options.');
   const address = readAddress(body.returnAddress);
   if (typeof address === 'string') return void fail(address);
+  if (!canSellIn(address.countryCode)) {
+    res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(address.countryCode)?.name ?? address.countryCode.toUpperCase()} yet.` });
+    return;
+  }
 
   const now = store.iso();
   const profile: SellerProfile = {
@@ -3624,6 +3671,8 @@ io.on('connection', (socket) => {
      * The host's muted words: a matching message is not stored or broadcast. The
      * sender is not told, so the filter cannot be probed word by word.
      */
+    // Blocked by the host, or timed out by the host or a moderator: not stored or broadcast.
+    if (!mayChat(room, userId)) return;
     if (room?.mutedWords?.length && room.creatorId !== userId) {
       const lower = body.toLowerCase();
       if (room.mutedWords.some((word) => lower.includes(word))) return;
@@ -3638,6 +3687,7 @@ io.on('connection', (socket) => {
       body,
       isPinned: false,
       isCreator: streams.get(payload.streamId)?.creatorId === userId,
+      isModerator: Boolean(room && room.creatorId !== userId && (room.moderatorIds ?? []).includes(userId)),
       createdAt: store.iso(),
     });
     io.to(`stream:${payload.streamId}`).emit('chat:message', message);
@@ -3645,9 +3695,8 @@ io.on('connection', (socket) => {
 
   socket.on('chat:pin', (payload) => {
     const userId = socketUserId(socket);
-    const owner = streams.get(payload.streamId)?.creatorId;
-    // Only the creator of the room may pin, or any viewer could control the room.
-    if (!userId || (owner && owner !== userId)) return;
+    // Only the host or the show's moderators may pin, or any viewer could control the room.
+    if (!userId || !canModerate(streams.get(payload.streamId), userId)) return;
     const list = chat.get(payload.streamId);
     const target = list.find((m) => m.id === payload.messageId) ?? null;
     chat.pin(payload.streamId, target?.id ?? null);
@@ -3689,8 +3738,14 @@ setInterval(() => {
 
 setInterval(() => {
   streams.live().forEach((stream) => {
-    const drift = Math.round((Math.random() - 0.42) * 24);
-    stream.viewerCount = Math.max(12, stream.viewerCount + drift);
+    if (stream.video) {
+      // A real broadcast: the count is the people actually in the room.
+      stream.viewerCount = io.sockets.adapter.rooms.get(`stream:${stream.id}`)?.size ?? 0;
+    } else {
+      // Seeded demo shows only (no broadcast behind them): keep the room feeling alive.
+      const drift = Math.round((Math.random() - 0.42) * 24);
+      stream.viewerCount = Math.max(12, stream.viewerCount + drift);
+    }
     stream.peakViewerCount = Math.max(stream.peakViewerCount, stream.viewerCount);
     streams.save(stream);
     io.to(`stream:${stream.id}`).emit('stream:viewers', { streamId: stream.id, viewerCount: stream.viewerCount });
@@ -3774,6 +3829,8 @@ if (shouldSeed(restoredRecords)) {
 persistence?.start();
 startLimiterSweep();
 startAiCompany();
+// Live exchange rates in production (or when asked); tests keep the fixed table so amounts are predictable.
+if (process.env.NODE_ENV === 'production' || process.env.MM_FX_SOURCE === 'live') startRates();
 
 /**
  * Expired codes and sessions are swept on an interval. Unref'd so the timer

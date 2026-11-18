@@ -37,6 +37,7 @@ import { LiveVideoCard } from '@/components/LiveVideoCard';
 import { BoardroomPanel } from '@/components/Boardroom';
 import { AuditPanel, OverviewStrip, PresidentPanel, ProvidersPanel, SettingsPanel } from '@/components/OwnerConsole';
 import { MessagesPanel, SellerChecksPanel } from '@/components/Messages';
+import { CountriesPanel, ReportsPanel } from '@/components/Countries';
 import { useAuctions, useStreams } from '@/lib/hooks';
 import { formatMoney, formatViewers, pct } from '@/lib/format';
 import { MONETIZATION } from '@moneymart/tokens';
@@ -51,15 +52,17 @@ const FLAGS = [
   { key: 'tv_apps', label: 'TV & IPTV apps', on: false, hint: 'Phase 3 — Q3 2027' },
 ];
 
-type ConsoleTab = 'overview' | 'president' | 'boardroom' | 'messages' | 'sellers' | 'settings' | 'providers' | 'audit';
+type ConsoleTab = 'overview' | 'president' | 'boardroom' | 'messages' | 'sellers' | 'countries' | 'reports' | 'settings' | 'providers' | 'audit';
 /** Console tabs that sit under a differently named server grant. */
-const SERVER_TAB: Partial<Record<ConsoleTab, string>> = { boardroom: 'president', messages: 'notifications' };
+const SERVER_TAB: Partial<Record<ConsoleTab, string>> = { boardroom: 'president', messages: 'notifications', countries: 'settings', reports: 'tickets' };
 const CONSOLE_TABS: { id: ConsoleTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'president', label: 'President' },
   { id: 'boardroom', label: 'Boardroom' },
   { id: 'messages', label: 'Messages' },
   { id: 'sellers', label: 'Seller checks' },
+  { id: 'countries', label: 'Countries' },
+  { id: 'reports', label: 'Reports' },
   { id: 'settings', label: 'Settings' },
   { id: 'providers', label: 'Providers' },
   { id: 'audit', label: 'Audit' },
@@ -152,6 +155,8 @@ export default function AdminPage() {
       {tab === 'boardroom' && <BoardroomPanel />}
       {tab === 'messages' && <MessagesPanel />}
       {tab === 'sellers' && <SellerChecksPanel />}
+      {tab === 'countries' && <CountriesPanel />}
+      {tab === 'reports' && <ReportsPanel />}
       {tab === 'settings' && <SettingsPanel owner={me.data?.role === 'owner'} />}
       {tab === 'providers' && <ProvidersPanel />}
       {tab === 'audit' && <AuditPanel />}

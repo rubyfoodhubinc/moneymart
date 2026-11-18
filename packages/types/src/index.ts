@@ -166,6 +166,34 @@ export interface Auction {
   featured?: boolean;
   /** Live show item: no extra time for late bids — the clock never moves. */
   suddenDeath?: boolean;
+  /** Buy It Now stock: units offered (default 1) and units sold so far. */
+  quantity?: number;
+  quantitySold?: number;
+}
+
+/** A buyer's shipping address. */
+export interface BuyerAddress extends PostalAddress {
+  id: string;
+  phone?: string;
+  isDefault: boolean;
+  createdAt: ISODate;
+}
+
+export type ReportKind = 'user' | 'listing' | 'show' | 'message';
+export interface SafetyReport {
+  id: string;
+  reporterId: string;
+  kind: ReportKind;
+  targetId: string;
+  /** For a message: the show it was said in. */
+  contextId?: string;
+  reason: string;
+  note?: string;
+  status: 'open' | 'actioned' | 'dismissed';
+  createdAt: ISODate;
+  resolvedAt?: ISODate;
+  resolvedBy?: string;
+  resolution?: string;
 }
 
 export type BidStatus = 'pending' | 'accepted' | 'rejected' | 'outbid' | 'winning';
@@ -290,6 +318,8 @@ export interface ChatMessage {
   body: string;
   isPinned: boolean;
   isCreator: boolean;
+  /** Sent by one of the show's moderators. */
+  isModerator?: boolean;
   createdAt: ISODate;
 }
 
@@ -309,6 +339,12 @@ export interface Order {
   currency: CurrencyCode;
   paymentStatus: PaymentStatus;
   shippingAddress?: Address;
+  /** Who the parcel goes to (snapshot of the buyer's default address when the order was made). */
+  shipToName?: string;
+  /** How shipping was worked out, e.g. "Combined with your other items from this show". */
+  shippingNote?: string;
+  /** Show the order came from, so shipping can be combined per show. */
+  streamId?: string;
   trackingNumber?: string;
   courierName?: string;
   orderStatus: OrderStatus;
@@ -370,7 +406,15 @@ export type BidRejectionReason =
   | 'self_bid'
   | 'rate_limited'
   /** The caller is not signed in, or the session token was rejected. */
-  | 'not_authenticated';
+  | 'not_authenticated'
+  /** No shipping address on the account yet — the app asks for it before the first bid or buy. */
+  | 'shipping_info_required'
+  /** The seller has blocked this member. */
+  | 'blocked'
+  /** Every unit of this Buy It Now listing has sold. */
+  | 'sold_out'
+  /** MoneyMart is not open for buying in the buyer's country yet. */
+  | 'country_closed';
 
 export interface BidPlacedPayload {
   auction: AuctionWithRelations;
@@ -390,6 +434,8 @@ export interface BidRejectedPayload {
 export interface AuctionWonPayload {
   auction: AuctionWithRelations;
   winnerId: string;
+  /** Public handle of the winner, for "X won!" in the live room. */
+  winnerHandle?: string;
   hammerPrice: number;
   buyersPremium: number;
   total: number;
@@ -467,6 +513,8 @@ export interface ServerToClientEvents {
   'stream:started': (payload: { streamId: string; liveVideoProvider: LiveVideoProviderId }) => void;
   'chat:message': (payload: ChatMessage) => void;
   'chat:pin': (payload: { streamId: string; message: ChatMessage | null }) => void;
+  /** A host or moderator removed a message. */
+  'chat:removed': (payload: { streamId: string; messageId: string }) => void;
   'notification': (payload: AppNotification) => void;
 }
 

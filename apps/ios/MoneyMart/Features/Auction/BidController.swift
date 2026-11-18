@@ -19,6 +19,12 @@ final class BidController {
     var placing = false
     var error: String?
     var banner: Banner?
+    /// The buyer needs to add a shipping address before this bid or buy can go through.
+    var needsShippingInfo = false
+    /// Name of the member leading (or who won), for "X is winning" / "X won!".
+    private(set) var leaderHandle: String?
+    @ObservationIgnored private var pending: Pending?
+    private enum Pending { case bid(Double), buy }
 
     struct Banner: Equatable, Identifiable {
         enum Kind { case success, warning, info }
@@ -53,6 +59,7 @@ final class BidController {
     private func apply(_ detail: AuctionDetailResponse) {
         auction = detail.auction
         bids = detail.bids
+        leaderHandle = detail.bids.first?.bidderHandle
         breakdown = detail.breakdown
         priceHistory = detail.priceHistory ?? []
         related = detail.related ?? []
@@ -70,6 +77,7 @@ final class BidController {
                 guard let self, payload.auction.id == id else { return }
                 self.auction = payload.auction
                 if !self.bids.contains(where: { $0.id == payload.bid.id }) { self.bids.insert(payload.bid, at: 0) }
+                self.leaderHandle = payload.bid.bidderHandle
                 self.minimumBid = payload.auction.currentBid + self.increments.minimum
                 if payload.extended == true {
                     self.banner = Banner(kind: .info, text: String(localized: "Anti-snipe: the clock was extended."))
@@ -82,7 +90,9 @@ final class BidController {
             realtime.on("auction:won", as: AuctionWonPayload.self) { [weak self] payload in
                 guard let self, payload.auction.id == id else { return }
                 self.auction = payload.auction
-                self.banner = Banner(kind: .success, text: String(localized: "Sold for \(Format.money(payload.hammerPrice, payload.auction.currency))"))
+                if let winner = payload.winnerHandle { self.leaderHandle = winner }
+                let who = payload.winnerHandle.map { "@\($0) " } ?? ""
+                self.banner = Banner(kind: .success, text: String(localized: "\(who)won for \(Format.money(payload.hammerPrice, payload.auction.currency))"))
             },
             realtime.on("auction:rejected", as: BidRejectedPayload.self) { [weak self] payload in
                 guard let self, payload.auctionId == id else { return }
@@ -112,10 +122,16 @@ final class BidController {
             auction = result.auction
             bids = result.bids
             minimumBid = result.auction.currentBid + increments.minimum
+            leaderHandle = result.bids.first?.bidderHandle ?? leaderHandle
             haptic.notificationOccurred(.success)
             banner = Banner(kind: .success, text: String(localized: "You're the highest bidder at \(Format.money(amount, result.auction.currency))"))
             return true
         } catch {
+            if (error as? APIError)?.code == "shipping_info_required" {
+                pending = .bid(amount)
+                needsShippingInfo = true
+                return false
+            }
             haptic.notificationOccurred(.error)
             banner = Banner(kind: .warning, text: error.localizedDescription)
             if let detail = try? await APIClient.shared.auction(id: auctionId) { apply(detail) }
@@ -125,6 +141,7 @@ final class BidController {
 
     var canBuyNow: Bool {
         guard isOpen, let auction, let price = auction.buyItNowPrice, price > 0 else { return false }
+        if let left = auction.unitsLeft, left == 0 { return false }
         return auction.currentBid < price
     }
 
@@ -141,10 +158,26 @@ final class BidController {
             banner = Banner(kind: .success, text: String(localized: "It’s yours! Check your orders for payment and shipping."))
             return result.orderId ?? ""
         } catch {
+            if (error as? APIError)?.code == "shipping_info_required" {
+                pending = .buy
+                needsShippingInfo = true
+                return nil
+            }
             haptic.notificationOccurred(.error)
             banner = Banner(kind: .warning, text: error.localizedDescription)
             if let detail = try? await APIClient.shared.auction(id: auctionId) { apply(detail) }
             return nil
+        }
+    }
+
+    /// After the buyer added an address: carry on with what they were doing (at the current minimum for a bid).
+    func resumeAfterShippingInfo() async {
+        let action = pending
+        pending = nil
+        switch action {
+        case .bid(let amount): await place(max(amount, minimumBid))
+        case .buy: await buyNow()
+        case nil: break
         }
     }
 

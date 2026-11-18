@@ -31,6 +31,9 @@ final class SessionStore {
     }
 
     var isSignedIn: Bool { status == .signedIn }
+
+    /// Currency the signed-in member chose to see prices in (Settings › Country & currency).
+    static var viewerCurrency: String?
     var currency: String { user?.currencyCode ?? Locale.current.currency?.identifier ?? "USD" }
 
     func bootstrap() async {
@@ -45,9 +48,11 @@ final class SessionStore {
             let session = try await api.authSession()
             guard let user = session.user else { throw APIError(status: 401, code: "not_authenticated", message: "") }
             self.user = user
+            Self.viewerCurrency = user.currencyCode
             status = .signedIn
             realtime.emit("user:join", user.id)
             await PushManager.shared.signedIn(userId: user.id)
+            await BuyerState.shared.load()
         } catch let error as APIError where error.status == 401 || error.status == 403 {
             await api.setToken(nil)
             realtime.updateToken(nil)
@@ -105,10 +110,12 @@ final class SessionStore {
             await api.setToken(result.token)
             realtime.updateToken(result.token)
             user = result.user
+            Self.viewerCurrency = result.user.currencyCode
             self.challenge = nil
             status = .signedIn
             realtime.emit("user:join", result.user.id)
             await PushManager.shared.signedIn(userId: result.user.id)
+            await BuyerState.shared.load()
             return true
         } catch {
             self.error = error.localizedDescription
@@ -120,6 +127,7 @@ final class SessionStore {
 
     func signOut() async {
         await PushManager.shared.signedOut()
+        BuyerState.shared.reset()
         _ = try? await api.signOut()
         await api.setToken(nil)
         realtime.updateToken(nil)
@@ -133,7 +141,7 @@ final class SessionStore {
         defer { busy = false }
         do {
             let result = try await api.updateMe(patch)
-            if let updated = result.user { user = updated }
+            if let updated = result.user { user = updated; Self.viewerCurrency = updated.currencyCode }
             return true
         } catch {
             self.error = error.localizedDescription

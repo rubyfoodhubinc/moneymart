@@ -28,11 +28,13 @@ struct MoneyMartApp: App {
                 .environment(ore)
                 .environment(Realtime.shared)
                 .environment(PushManager.shared)
+                .environment(BuyerState.shared)
                 .preferredColorScheme(.dark)
                 .tint(MM.Color.gold)
                 .task { await session.bootstrap() }
                 .task { await ore.refreshStatus() }
                 .task { PushManager.shared.configure(router: router) }
+                .task { await Markets.shared.load() }
                 .onOpenURL { router.open($0) }
         }
     }
@@ -70,7 +72,7 @@ private extension UIFont {
 @Observable
 final class Router {
     enum Tab: Hashable { case home, discover, live, sell, profile }
-    enum Route: Hashable { case auction(String), stream(String), notifications, orders, wallet, watchlist, settings, verification }
+    enum Route: Hashable { case auction(String), stream(String), notifications, orders, wallet, watchlist, settings, verification, order(String), addresses, seller(String) }
 
     var tab: Tab = .home
     var homePath: [Route] = []
@@ -106,7 +108,7 @@ final class Router {
         case "stream", "streams", "live":
             if !id.isEmpty { tab = .live; livePath = [.stream(id)] }
         case "orders":
-            tab = .profile; profilePath = [.orders]
+            tab = .profile; profilePath = id.isEmpty ? [.orders] : [.orders, .order(id)]
         case "account":
             tab = .profile; profilePath = id == "wallet" ? [.wallet] : id == "selling" ? [.orders] : []
         case "verification":
@@ -181,6 +183,9 @@ extension View {
             case .watchlist: WatchlistView()
             case .settings: SettingsView()
             case .verification: VerificationView()
+            case .order(let id): OrderDetailView(orderId: id)
+            case .addresses: AddressesView()
+            case .seller(let handle): SellerProfileView(handle: handle)
             }
         }
     }

@@ -22,6 +22,9 @@ struct APIError: LocalizedError, Sendable, Equatable {
         case "verification_required": return String(localized: "Verify your identity (Profile › Verification) before scheduling a show.")
         case "verification_unavailable": return String(localized: "Identity checks aren't switched on yet.")
         case "already_verified": return String(localized: "Your account is already verified.")
+        case "shipping_info_required": return String(localized: "Add your shipping address to bid or buy. Nothing is charged until you win.")
+        case "blocked": return String(localized: "This seller isn’t accepting bids from your account.")
+        case "sold_out": return String(localized: "Sold out.")
         case "listing_in_other_show": return String(localized: "That item is already in another show.")
         case "live_video_unavailable": return String(localized: "Live video is unavailable right now. Try again, or switch to the backup.")
         case "not_live": return String(localized: "This show is not broadcasting right now.")
@@ -301,6 +304,65 @@ extension APIClient {
     func markRead(_ id: String) async throws -> OkResponse {
         struct B: Encodable, Sendable { let id: String }
         return try await post("/api/notifications/read", body: B(id: id))
+    }
+
+    // MARK: Buyer addresses and quotes
+
+    struct AddressInput: Encodable, Sendable {
+        var fullName: String, line1: String, line2: String?, city: String, region: String, postalCode: String, countryCode: String, phone: String?, isDefault: Bool?
+    }
+    func addresses() async throws -> AddressesResponse { try await get("/api/me/addresses") }
+    func addAddress(_ input: AddressInput) async throws -> AddressesResponse { try await post("/api/me/addresses", body: input) }
+    func deleteAddress(_ id: String) async throws -> AddressesResponse { try await delete("/api/me/addresses/\(id)") }
+    func makeDefaultAddress(_ id: String) async throws -> AddressesResponse {
+        struct B: Encodable, Sendable { let isDefault = true }
+        return try await put("/api/me/addresses/\(id)", body: B())
+    }
+    func quote(auctionId: String, price: Double) async throws -> PriceQuote {
+        try await get("/api/auctions/\(auctionId)/quote", query: ["price": String(price)])
+    }
+
+    // MARK: Follows, blocks, reports
+
+    func relationship(_ userId: String) async throws -> Relationship { try await get("/api/users/\(userId)/relationship") }
+    func follow(_ userId: String, on: Bool) async throws -> FollowResult {
+        on ? try await post("/api/users/\(userId)/follow") : try await delete("/api/users/\(userId)/follow")
+    }
+    func block(_ userId: String, on: Bool) async throws -> OkResponse {
+        on ? try await post("/api/users/\(userId)/block") : try await delete("/api/users/\(userId)/block")
+    }
+    func myBlocks() async throws -> IdsResponse { try await get("/api/me/blocks") }
+    func report(kind: String, targetId: String, contextId: String? = nil, reason: String, note: String?) async throws -> OkResponse {
+        struct B: Encodable, Sendable { let kind: String; let targetId: String; let contextId: String?; let reason: String; let note: String? }
+        return try await post("/api/reports", body: B(kind: kind, targetId: targetId, contextId: contextId, reason: reason, note: note))
+    }
+    func userProfile(handle: String) async throws -> UserProfileResponse { try await get("/api/users/\(handle)") }
+    func streams(creator: String) async throws -> ListResponse<LiveStream> { try await get("/api/streams", query: ["creator": creator]) }
+
+    // MARK: Orders
+
+    func order(id: String) async throws -> OrderDetailResponse { try await get("/api/orders/\(id)") }
+    func payOrder(id: String) async throws -> OkOrCreated { try await post("/api/orders/\(id)/pay") }
+    func confirmOrder(id: String) async throws -> OkOrCreated { try await post("/api/orders/\(id)/confirm") }
+    func disputeOrder(id: String, reason: String) async throws -> OkOrCreated {
+        struct B: Encodable, Sendable { let reason: String }
+        return try await post("/api/orders/\(id)/dispute", body: B(reason: reason))
+    }
+    func shipOrder(id: String, courier: String, tracking: String) async throws -> OkOrCreated {
+        struct B: Encodable, Sendable { let orderStatus = "shipped"; let courierName: String; let trackingNumber: String }
+        return try await post("/api/orders/\(id)/status", body: B(courierName: courier, trackingNumber: tracking))
+    }
+
+    // MARK: Show moderation (host and moderators)
+
+    func pin(streamId: String, messageId: String?) async throws -> OkOrCreated {
+        struct B: Encodable, Sendable { let messageId: String? }
+        return try await post("/api/streams/\(streamId)/pin", body: B(messageId: messageId))
+    }
+    func removeMessage(streamId: String, messageId: String) async throws -> OkOrCreated { try await post("/api/streams/\(streamId)/chat/\(messageId)/remove") }
+    func timeout(streamId: String, userId: String, minutes: Int) async throws -> OkOrCreated {
+        struct B: Encodable, Sendable { let userId: String; let minutes: Int }
+        return try await post("/api/streams/\(streamId)/timeout", body: B(userId: userId, minutes: minutes))
     }
 
     // MARK: Push

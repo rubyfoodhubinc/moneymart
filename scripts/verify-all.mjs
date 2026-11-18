@@ -81,6 +81,11 @@ const SUITES = [
     detail: 'Didit checks (signed webhook, decision on return), verified-only switch, APNs push, order alerts, Owner messages',
   },
   {
+    name: 'Buyers, shipping, follows & safety',
+    script: 'verify-community.mjs',
+    detail: 'address gate, shipping per show + cap, Buy It Now stock, follows, blocks, reports, moderators, real earnings',
+  },
+  {
     name: 'Concurrency across auctions',
     script: 'verify-concurrency.mjs',
     detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',

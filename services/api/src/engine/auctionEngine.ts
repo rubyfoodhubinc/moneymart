@@ -23,6 +23,7 @@ import { ANTI_SNIPE } from '@moneymart/tokens';
 import { money } from './money.js';
 import { openEscrow } from './escrow.js';
 import { isProUser } from './subscriptions.js';
+import { buyerBlocker, quoteForSale } from './shipping.js';
 import { auctions, autoBids, items, notifications, orders, streams, store, users } from '../store.js';
 
 export type EngineEvent =
@@ -237,6 +238,8 @@ export function placeBid(input: PlaceBidInput): EngineEvent[] {
   if (auction.sellerId === input.bidderId) {
     return rejectWith('self_bid', 'You cannot bid on your own listing.');
   }
+  const blocker = buyerBlocker(auction, input.bidderId);
+  if (blocker) return rejectWith(blocker.reason, blocker.message);
   if (isRateLimited(input.bidderId, auction.id)) {
     return rejectWith('rate_limited', 'Slow down — too many bids in one second.');
   }
@@ -420,8 +423,6 @@ export function settleAuction(auctionId: string): EngineEvent[] {
 
   const hammerPrice = winning.amount;
   const winnerId = winning.bidderId;
-  const buyer = users.get(winnerId);
-  const seller = users.get(auction.sellerId);
   // Lots and auctions live in separate maps in the store, so the category —
   // which decides whether the luxury rate applies — comes from the item.
   const lot = items.get(auction.itemId);
@@ -434,21 +435,40 @@ export function settleAuction(auctionId: string): EngineEvent[] {
    */
   const winnerIsPro = isProUser(winnerId);
   const rate = money.effectiveBuyersPremiumRate(auction.buyersPremiumRate, lot?.categoryId, winnerIsPro);
-  const breakdown = money.costBreakdown({
-    hammerPrice,
-    currency: auction.currency,
-    buyersPremiumRate: rate,
-    isPro: winnerIsPro,
-    buyerCountry: buyer?.countryCode ?? 'US',
-    sellerCountry: seller?.countryCode ?? 'US',
-  });
+  const { order, breakdown } = createSaleOrder(auction, winnerId, hammerPrice, rate, winnerIsPro);
 
   auction.status = 'sold';
   auction.hammerPrice = hammerPrice;
   auction.winnerId = winnerId;
   auctions.save(auction);
 
+  notifyWinner(auction, winnerId, hammerPrice, rate, order.totalAmount, order.id);
+  notifySeller(auction, hammerPrice);
+
+  // Build the expanded projection the clients render, without importing the
+  // HTTP layer's view helper (keeps the engine transport-agnostic).
+  return finishWon(events, auction, winnerId, hammerPrice, breakdown);
+}
+
+/** Price, shipping, tax and the order + escrow for one sale (an auction win or one Buy It Now unit). */
+function createSaleOrder(auction: Auction, winnerId: string, hammerPrice: number, rate: number, winnerIsPro: boolean) {
+  const buyer = users.get(winnerId);
+  const seller = users.get(auction.sellerId);
+  const quote = quoteForSale(auction, winnerId, hammerPrice);
+  const breakdown = money.costBreakdown({
+    hammerPrice,
+    currency: auction.currency,
+    buyersPremiumRate: rate,
+    isPro: winnerIsPro,
+    buyerCountry: quote.shippingAddress?.countryCode ?? buyer?.countryCode ?? 'US',
+    sellerCountry: seller?.sellerProfile?.returnAddress?.countryCode?.toUpperCase() ?? seller?.countryCode ?? 'US',
+    shipping: quote.amount,
+  });
   const order = orders.create({
+    streamId: auction.streamId,
+    shippingNote: quote.note,
+    shipToName: quote.shipToName,
+    shippingAddress: quote.shippingAddress,
     id: store.nextId('ord'),
     auctionId: auction.id,
     buyerId: winnerId,
@@ -474,18 +494,23 @@ export function settleAuction(auctionId: string): EngineEvent[] {
     buyerCountry: buyer?.countryCode,
     sellerCountry: seller?.countryCode,
   });
+  return { order, breakdown };
+}
 
+function notifyWinner(auction: Auction, winnerId: string, hammerPrice: number, rate: number, total: number, orderId: string): void {
   notifications.create({
     id: store.nextId('ntf'),
     userId: winnerId,
     category: 'orders',
     title: 'You won the lot',
-    body: `${auction.title} — hammer ${money.formatMoney(hammerPrice, auction.currency)} plus ${Math.round(rate * 100)}% buyer's premium. Total ${money.formatMoney(order.totalAmount, auction.currency)} due; funds are held in escrow until you confirm delivery. Invoice ${order.id}.`,
-    href: `/orders/${order.id}`,
+    body: `${auction.title} — hammer ${money.formatMoney(hammerPrice, auction.currency)} plus ${Math.round(rate * 100)}% buyer's premium. Total ${money.formatMoney(total, auction.currency)} due; funds are held in escrow until you confirm delivery. Invoice ${orderId}.`,
+    href: `/orders/${orderId}`,
     read: false,
     createdAt: store.iso(),
   });
+}
 
+function notifySeller(auction: Auction, hammerPrice: number): void {
   notifications.create({
     id: store.nextId('ntf'),
     userId: auction.sellerId,
@@ -496,9 +521,9 @@ export function settleAuction(auctionId: string): EngineEvent[] {
     read: false,
     createdAt: store.iso(),
   });
+}
 
-  // Build the expanded projection the clients render, without importing the
-  // HTTP layer's view helper (keeps the engine transport-agnostic).
+function finishWon(events: EngineEvent[], auction: Auction, winnerId: string, hammerPrice: number, breakdown: { buyersPremium: number; total: number }): EngineEvent[] {
   const wonItem = items.get(auction.itemId);
   const wonSeller = users.get(auction.sellerId);
   const payload: AuctionWonPayload = {
@@ -535,6 +560,7 @@ export function settleAuction(auctionId: string): EngineEvent[] {
       reserveMet: true,
     },
     winnerId,
+    winnerHandle: users.get(winnerId)?.handle,
     hammerPrice,
     buyersPremium: breakdown.buyersPremium,
     total: breakdown.total,
@@ -603,6 +629,25 @@ export function buyItNow(input: { auctionId: string; buyerId: string; buyerHandl
   // Once bidding passes the Buy It Now price, the lot is decided by bidding.
   if (auction.currentBid >= price) return reject('auction_ended', 'Bidding has passed the Buy It Now price.');
   if (!users.get(input.buyerId)) return reject('insufficient_funds', 'No verified payment method on file.');
+  const blocker = buyerBlocker(auction, input.buyerId);
+  if (blocker) return reject(blocker.reason, blocker.message);
+
+  // Several units: sell one, keep the listing open until the last unit goes.
+  const quantity = Math.max(1, auction.quantity ?? 1);
+  const sold = auction.quantitySold ?? 0;
+  if (sold >= quantity) return reject('sold_out', 'Sold out.');
+  if (quantity - sold > 1) {
+    const isPro = isProUser(input.buyerId);
+    const rate = money.effectiveBuyersPremiumRate(auction.buyersPremiumRate, items.get(auction.itemId)?.categoryId, isPro);
+    const { order } = createSaleOrder(auction, input.buyerId, price, rate, isPro);
+    auction.quantitySold = sold + 1;
+    auctions.save(auction);
+    notifyWinner(auction, input.buyerId, price, rate, order.totalAmount, order.id);
+    notifySeller(auction, price);
+    events.push({ type: 'sold', auction: { ...auction } });
+    return events;
+  }
+  auction.quantitySold = sold + 1;
 
   recordBid({ auction, bidderId: input.buyerId, bidderHandle: input.buyerHandle, amount: price, isAutoBid: false });
   auction.endTime = new Date(Date.now() - 1).toISOString();

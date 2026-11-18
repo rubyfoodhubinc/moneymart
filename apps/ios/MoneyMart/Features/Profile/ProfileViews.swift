@@ -88,6 +88,9 @@ struct ProfileView: View {
                     .accessibilityIdentifier("profile-ore")
             }
             NavigationLink(value: Router.Route.orders) { row("shippingbox.fill", "Orders") }
+                .accessibilityIdentifier("profile-orders")
+            NavigationLink(value: Router.Route.addresses) { row("house.fill", "Addresses") }
+                .accessibilityIdentifier("profile-addresses")
             NavigationLink(value: Router.Route.wallet) { row("creditcard.fill", "Wallet & payouts") }
             NavigationLink(value: Router.Route.watchlist) { row("heart.fill", "Watchlist") }
             NavigationLink(value: Router.Route.notifications) { row("bell.fill", "Notifications", badge: unread > 0 ? "\(unread)" : nil) }
@@ -139,12 +142,14 @@ struct OrdersView: View {
                 EmptyStateView(symbol: "shippingbox", title: "No orders yet", message: "Won lots and sales appear here with tracking.").listRowBackground(Color.clear)
             }
             ForEach(list) { order in
-                NavigationLink(value: Router.Route.auction(order.auctionId)) {
+                NavigationLink(value: Router.Route.order(order.id)) {
                     HStack(spacing: 12) {
                         ArtworkView(source: order.auction?.coverImage).frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 10))
                         VStack(alignment: .leading, spacing: 3) {
                             Text(order.auction?.title ?? order.id).font(MM.Font.body(14, weight: .semibold)).foregroundStyle(MM.Color.ink).lineLimit(1)
-                            Text(order.orderStatus.capitalized).font(MM.Font.body(12, weight: .semibold)).foregroundStyle(MM.Color.green)
+                            Text(order.paymentStatus != "paid" && order.orderStatus == "pending" ? String(localized: "Payment due") : order.orderStatus.capitalized)
+                                .font(MM.Font.body(12, weight: .semibold))
+                                .foregroundStyle(order.paymentStatus != "paid" && order.orderStatus == "pending" ? MM.Color.gold : MM.Color.green)
                             if let tracking = order.trackingNumber { Text("\(order.courierName ?? "") \(tracking)").font(MM.Font.body(11)).foregroundStyle(MM.Color.ink3) }
                         }
                         Spacer()
@@ -328,6 +333,7 @@ struct SettingsView: View {
     @State private var displayName = ""
     @State private var bio = ""
     @State private var market = "USD"
+    @State private var country = "US"
     @State private var notify: [String: Bool] = [:]
     @State private var saved = false
     @State private var apiOverride = AppConfig.currentOverride ?? ""
@@ -344,9 +350,21 @@ struct SettingsView: View {
                 Section("Profile") {
                     TextField("Display name", text: $displayName)
                     TextField("Bio", text: $bio, axis: .vertical).lineLimit(2...4)
-                    Picker("Market & currency", selection: $market) {
-                        ForEach(Catalog.markets) { Text("\($0.flag) \($0.country) · \($0.currency)").tag($0.currency) }
+                }
+                Section {
+                    Picker("Country", selection: $country) {
+                        ForEach(Markets.shared.countries) { c in
+                            Text("\(c.flag) \(c.name)\(c.buy ? "" : " — " + String(localized: "not open yet"))").tag(c.code)
+                        }
                     }
+                    .accessibilityIdentifier("settings-country")
+                    .onChange(of: country) { _, code in if let c = Markets.shared.country(code) { market = c.currency } }
+                    Picker("Show prices in", selection: $market) {
+                        ForEach(Array(Set(Markets.shared.countries.map(\.currency))).sorted(), id: \.self) { Text($0).tag($0) }
+                    }
+                    .accessibilityIdentifier("settings-currency")
+                } header: { Text("Country & currency") } footer: {
+                    Text("Items are charged in the seller’s currency. We show an estimate in yours at today’s rate.")
                 }
                 Section("Notifications") {
                     ForEach(notificationKeys, id: \.0) { key, label in
@@ -395,11 +413,11 @@ struct SettingsView: View {
         displayName = user.displayName
         bio = user.bio ?? ""
         market = user.currencyCode ?? "USD"
+        country = user.countryCode ?? Markets.shared.countries.first(where: { $0.currency == market })?.code ?? "US"
         notify = user.preferences?.notifications ?? [:]
     }
 
     private func save() async {
-        let country = Catalog.markets.first { $0.currency == market }?.countryCode
         var prefs = session.user?.preferences ?? UserPreferences()
         prefs.notifications = notify
         prefs.language = Locale.current.language.languageCode?.identifier

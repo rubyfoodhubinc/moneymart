@@ -197,7 +197,7 @@ struct SellerOnboardingView: View {
     }
 
     private var countryCodes: [String] {
-        var codes = Catalog.markets.map(\.countryCode)
+        var codes = Markets.shared.sellingCountries.map(\.code)
         if !address.countryCode.isEmpty, !codes.contains(address.countryCode) { codes.insert(address.countryCode, at: 0) }
         return codes
     }

@@ -83,6 +83,8 @@ final class MoneyMartUITests: XCTestCase {
         let quick = app.buttons["bid-quick-0"]
         XCTAssertTrue(quick.waitForExistence(timeout: 5))
         quick.tap()
+        // A new buyer is asked for a shipping address first; the bid then goes through.
+        addAddressIfAsked()
         let banner = element("bid-banner")
         XCTAssertTrue(banner.waitForExistence(timeout: 15))
         XCTAssertTrue(banner.label.localizedCaseInsensitiveContains("highest bidder"), "bid accepted: \(banner.label)")
@@ -320,6 +322,121 @@ final class MoneyMartUITests: XCTestCase {
         keep("Notifications - inbox")
         note.tap()
         XCTAssertTrue(element("verify-status").waitForExistence(timeout: 5), "tapping a notification opens its screen")
+    }
+
+    /// First bid → shipping address → pay the order; then the live room: host sheet, follow, seller page, shop, costs.
+    func testBuyerAddressOrderAndLiveRoom() async throws {
+        try await prepareLocalGateway()
+        app.buttons["welcome-skip"].tap()
+        try signIn("qa.wavea@moneymart.test")
+
+        // Bid on a lot: the address sheet appears before the first bid.
+        app.tabBars.buttons["Discover"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("LeBron\n")
+        let lot = element("lot-auc_lebron")
+        XCTAssertTrue(lot.waitForExistence(timeout: 15))
+        lot.tap()
+        let bid = app.buttons["lot-bid"]
+        XCTAssertTrue(bid.waitForExistence(timeout: 10))
+        bid.tap()
+        let quick = app.buttons["bid-quick-0"]
+        XCTAssertTrue(quick.waitForExistence(timeout: 5))
+        quick.tap()
+        XCTAssertTrue(app.buttons["gate-add-address"].waitForExistence(timeout: 10), "a new buyer is asked for a shipping address first")
+        keep("Gate - before first bid")
+        addAddressIfAsked()
+        let banner = element("bid-banner")
+        XCTAssertTrue(banner.waitForExistence(timeout: 15))
+        XCTAssertTrue(banner.label.localizedCaseInsensitiveContains("highest bidder"), "after the address the bid goes through: \(banner.label)")
+        if app.buttons["Close"].exists { app.buttons["Close"].tap() }
+
+        // The lot closes; the winner pays from the order screen.
+        try await dev("/api/dev/clock", ["auctionId": "auc_lebron", "secondsFromNow": 0])
+        try await Task.sleep(for: .seconds(3))
+        app.tabBars.buttons["Profile"].tap()
+        let orders = app.buttons["profile-orders"]
+        scrollTo(orders)
+        orders.tap()
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS 'LeBron'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "the won lot is in Orders")
+        row.tap()
+        let pay = app.buttons["order-pay"]
+        XCTAssertTrue(pay.waitForExistence(timeout: 10), "the buyer can pay in the app")
+        keep("Order - payment due")
+        pay.tap()
+        let confirmPay = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Pay '")).element(boundBy: 1)
+        if confirmPay.waitForExistence(timeout: 5) { confirmPay.tap() } else { app.sheets.buttons.element(boundBy: 0).tap() }
+        XCTAssertTrue(element("order-notice").waitForExistence(timeout: 15), "payment is taken and held")
+        XCTAssertTrue(app.buttons["order-claim"].waitForExistence(timeout: 5), "a paid order can raise a problem")
+        keep("Order - paid")
+
+        // Live room: tap the host, follow, open their page; shop and costs.
+        openShow("str_adaluxe")
+        let host = app.buttons["stream-host"]
+        XCTAssertTrue(host.waitForExistence(timeout: 15), "the host is tappable")
+        keep("Live - room")
+        host.tap()
+        let follow = app.buttons["host-follow"]
+        XCTAssertTrue(follow.waitForExistence(timeout: 10))
+        follow.tap()
+        let following = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Following'")).firstMatch
+        XCTAssertTrue(following.waitForExistence(timeout: 10), "following the host")
+        keep("Live - host sheet")
+        app.buttons["host-profile"].tap()
+        XCTAssertTrue(app.buttons["seller-follow"].waitForExistence(timeout: 10), "the seller page opens")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Following'")).firstMatch.waitForExistence(timeout: 10), "and shows you follow them")
+        keep("Seller page")
+
+        openShow("str_adaluxe")
+        let costs = app.buttons["stream-costs"]
+        if costs.waitForExistence(timeout: 10) {
+            costs.tap()
+            XCTAssertTrue(app.staticTexts["Total"].waitForExistence(timeout: 10), "shipping and total for this buyer")
+            keep("Live - shipping and total")
+            app.buttons["quote-done"].tap()
+            await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["quote-done"])], timeout: 5)
+        }
+        let shop = app.buttons["stream-shop"]
+        if shop.waitForExistence(timeout: 5) {
+            shop.tap()
+            XCTAssertTrue(app.searchFields["Search this show"].waitForExistence(timeout: 8), "viewers can browse the show’s items")
+            keep("Live - shop")
+        }
+    }
+
+    private func openShow(_ id: String) {
+        app.tabBars.buttons["Live"].tap()
+        // The Live tab may still be showing the room from before.
+        if app.buttons["stream-host"].waitForExistence(timeout: 2) { return }
+        let card = app.buttons["stream-card-\(id)"]
+        scrollTo(card)
+        card.tap()
+    }
+
+    private func addAddressIfAsked() {
+        let gate = app.buttons["gate-add-address"]
+        guard gate.waitForExistence(timeout: 8) else { return }
+        gate.tap()
+        fill("address-name", "QA Buyer")
+        fill("address-line1", "1 Test Street")
+        fill("address-city", "Austin")
+        fill("address-region", "TX")
+        fill("address-postal", "78701")
+        let save = app.buttons["address-save"]
+        scrollTo(save)
+        save.tap()
+    }
+
+    private func dev(_ path: String, _ body: [String: Any]) async throws {
+        guard let raw = ProcessInfo.processInfo.environment["MM_API_URL"], let base = URL(string: raw) else { return }
+        var request = URLRequest(url: base.appending(path: path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        _ = try await URLSession.shared.data(for: request)
     }
 
     /// Keeps a screenshot in the test result (for reviewing the design).

@@ -147,6 +147,9 @@ struct Auction: Codable, Hashable, Identifiable, Sendable {
     var winnerId: String?
     /// Live show item where late bids do not add time.
     var suddenDeath: Bool?
+    /// Buy It Now stock (default 1) and units sold.
+    var quantity: Int?
+    var quantitySold: Int?
     var watchers: Int?
     var featured: Bool?
     var item: Item?
@@ -160,6 +163,11 @@ struct Auction: Codable, Hashable, Identifiable, Sendable {
     var displayPrice: Double { currentBid > 0 ? currentBid : startingPrice }
     var coverImage: String? { item?.images.first }
     var categoryId: String { item?.categoryId ?? "collectibles" }
+    /// Units still for sale when the listing offers more than one.
+    var unitsLeft: Int? {
+        guard let quantity, quantity > 1 else { return nil }
+        return max(0, quantity - (quantitySold ?? 0))
+    }
 }
 
 struct Bid: Codable, Hashable, Identifiable, Sendable {
@@ -235,6 +243,7 @@ struct ChatMessage: Codable, Hashable, Identifiable, Sendable {
     var body: String
     var isPinned: Bool?
     var isCreator: Bool?
+    var isModerator: Bool?
     var createdAt: String
 }
 
@@ -269,10 +278,30 @@ struct AppNotification: Codable, Hashable, Identifiable, Sendable {
     var createdAt: String
 }
 
+struct ShipAddress: Codable, Hashable, Sendable {
+    var line1: String
+    var line2: String?
+    var city: String
+    var region: String?
+    var postalCode: String?
+    var countryCode: String
+
+    var oneLine: String { [line1, line2, city, region, postalCode, countryCode].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ") }
+}
+
 struct Order: Codable, Hashable, Identifiable, Sendable {
     let id: String
     var auctionId: String
+    var buyerId: String?
+    var sellerId: String?
+    var streamId: String?
     var hammerPrice: Double?
+    var buyersPremium: Double?
+    var shipping: Double?
+    var tax: Double?
+    var shippingNote: String?
+    var shipToName: String?
+    var shippingAddress: ShipAddress?
     var totalAmount: Double
     var currency: String
     var paymentStatus: String?
@@ -433,6 +462,7 @@ struct BidRejectedPayload: Codable, Sendable {
 struct AuctionWonPayload: Codable, Sendable {
     var auction: Auction
     var winnerId: String
+    var winnerHandle: String?
     var hammerPrice: Double
     var total: Double?
 }
@@ -537,4 +567,70 @@ struct WatchResponse: Codable, Sendable {
 
 struct StreamActionResponse: Codable, Sendable {
     var stream: LiveStream?
+}
+
+
+// MARK: - Buyers, follows and safety
+
+struct BuyerAddress: Codable, Hashable, Identifiable, Sendable {
+    let id: String
+    var fullName: String
+    var line1: String
+    var line2: String?
+    var city: String
+    var region: String?
+    var postalCode: String?
+    var countryCode: String
+    var phone: String?
+    var isDefault: Bool
+
+    var oneLine: String { [line1, line2, city, region, postalCode, countryCode].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ") }
+}
+
+struct AddressesResponse: Codable, Sendable {
+    var items: [BuyerAddress]
+    var ready: Bool?
+}
+
+struct PriceQuote: Codable, Sendable {
+    var hammerPrice: Double
+    var buyersPremium: Double
+    var buyersPremiumRate: Double
+    var shipping: Double
+    var tax: Double
+    var total: Double
+    var currency: String
+    var shippingNote: String?
+    var ready: Bool?
+    var blocker: String?
+    var viewerCurrency: String?
+    var viewerTotal: Double?
+}
+
+struct Relationship: Codable, Sendable {
+    var following: Bool
+    var followsYou: Bool?
+    var blocked: Bool
+    var followersCount: Int?
+    var followingCount: Int?
+}
+
+struct FollowResult: Codable, Sendable {
+    var following: Bool
+    var followersCount: Int?
+}
+
+struct IdsResponse: Codable, Sendable { var ids: [String] }
+
+struct UserProfileResponse: Codable, Sendable {
+    var profile: PublicProfile
+    var listings: [Auction]
+    var completedSales: Int?
+}
+
+struct OrderDetailResponse: Codable, Sendable {
+    var order: Order
+    var auction: Auction?
+    var buyer: PublicProfile?
+    var seller: PublicProfile?
 }

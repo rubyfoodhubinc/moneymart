@@ -150,6 +150,8 @@ async function signIn(label) {
     }
     return null;
   }
+  // New buyers add a shipping address before bidding (the app asks for it before the first bid).
+  await call('/api/me/addresses', { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: { fullName: label, line1: '1 Test Street', city: 'Houston', region: 'TX', postalCode: '77002', countryCode: 'US' } });
   return { token, id: session.json.profile.id, handle: session.json.profile.handle, auth: { authorization: `Bearer ${token}` } };
 }
 

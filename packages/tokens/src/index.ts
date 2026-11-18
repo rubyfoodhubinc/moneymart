@@ -210,6 +210,7 @@ export const currency = {
   KES: { code: 'KES', symbol: 'KSh', locale: 'en-KE', label: 'Kenyan Shilling', country: 'Kenya', flag: '🇰🇪' },
   GHS: { code: 'GHS', symbol: 'GH₵', locale: 'en-GH', label: 'Ghanaian Cedi', country: 'Ghana', flag: '🇬🇭' },
   ZAR: { code: 'ZAR', symbol: 'R', locale: 'en-ZA', label: 'South African Rand', country: 'South Africa', flag: '🇿🇦' },
+  EUR: { code: 'EUR', symbol: '€', locale: 'en-IE', label: 'Euro', country: 'Eurozone', flag: '🇪🇺' },
 } as const;
 
 export type CurrencyCode = keyof typeof currency;
@@ -223,6 +224,7 @@ export const fxToUSD: Record<CurrencyCode, number> = {
   KES: 1 / 129,
   GHS: 1 / 15.4,
   ZAR: 0.055,
+  EUR: 1.08,
 };
 
 export const auctionType = {

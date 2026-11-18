@@ -9,6 +9,8 @@
  */
 import type {
   AppNotification,
+  BuyerAddress,
+  SafetyReport,
   EscrowRecord,
   Storefront,
   Auction,
@@ -101,6 +103,16 @@ export const db = {
   pushDevices: new Map<string, PushDevice>(),
   /** Messages the Owner (or an approved President proposal) sent to members. */
   broadcasts: new Map<string, BroadcastRecord>(),
+  /** Buyers' shipping addresses, per member. Private. */
+  addresses: new Map<string, BuyerAddress[]>(),
+  /** Follows, keyed `${followerId}>${sellerId}`. */
+  follows: new Map<string, { followerId: string; sellerId: string; at: string }>(),
+  /** Blocks, keyed `${blockerId}>${blockedId}`. */
+  blocks: new Map<string, { blockerId: string; blockedId: string; at: string }>(),
+  /** Reports from members to the Owner console. */
+  reports: new Map<string, SafetyReport>(),
+  /** Chat timeouts in a show, keyed `${streamId}>${userId}` → until (ISO). */
+  chatMutes: new Map<string, string>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
 };
@@ -415,6 +427,12 @@ export const chat = {
     db.chat.set(message.streamId, list);
     return message;
   },
+  remove: (streamId: string, messageId: string) => {
+    const list = db.chat.get(streamId) ?? [];
+    const next = list.filter((m) => m.id !== messageId);
+    db.chat.set(streamId, next);
+    return next.length !== list.length;
+  },
   pin: (streamId: string, messageId: string | null) => {
     const list = db.chat.get(streamId) ?? [];
     list.forEach((message) => {
@@ -512,6 +530,62 @@ export const broadcasts = {
     if (db.broadcasts.size > 500) db.broadcasts.delete(db.broadcasts.keys().next().value!);
     return b;
   },
+};
+
+/* ── Buyer addresses ───────────────────────────────────── */
+export const addresses = {
+  forUser: (userId: string) => db.addresses.get(userId) ?? [],
+  defaultFor: (userId: string) => {
+    const list = db.addresses.get(userId) ?? [];
+    return list.find((a) => a.isDefault) ?? list[0];
+  },
+  save: (userId: string, list: BuyerAddress[]) => {
+    db.addresses.set(userId, list);
+    return list;
+  },
+};
+
+/* ── Follows and blocks ────────────────────────────────── */
+export const follows = {
+  is: (followerId: string, sellerId: string) => db.follows.has(`${followerId}>${sellerId}`),
+  add: (followerId: string, sellerId: string) => {
+    db.follows.set(`${followerId}>${sellerId}`, { followerId, sellerId, at: new Date().toISOString() });
+  },
+  remove: (followerId: string, sellerId: string) => db.follows.delete(`${followerId}>${sellerId}`),
+  followersOf: (sellerId: string) => [...db.follows.values()].filter((f) => f.sellerId === sellerId).map((f) => f.followerId),
+  following: (followerId: string) => [...db.follows.values()].filter((f) => f.followerId === followerId).map((f) => f.sellerId),
+};
+export const blocks = {
+  /** True when `blockerId` has blocked `blockedId`. */
+  has: (blockerId: string, blockedId: string) => db.blocks.has(`${blockerId}>${blockedId}`),
+  /** True when either has blocked the other. */
+  between: (a: string, b: string) => db.blocks.has(`${a}>${b}`) || db.blocks.has(`${b}>${a}`),
+  add: (blockerId: string, blockedId: string) => {
+    db.blocks.set(`${blockerId}>${blockedId}`, { blockerId, blockedId, at: new Date().toISOString() });
+  },
+  remove: (blockerId: string, blockedId: string) => db.blocks.delete(`${blockerId}>${blockedId}`),
+  by: (blockerId: string) => [...db.blocks.values()].filter((b) => b.blockerId === blockerId).map((b) => b.blockedId),
+};
+
+/* ── Reports ───────────────────────────────────────────── */
+export const reports = {
+  all: () => [...db.reports.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  get: (id: string) => db.reports.get(id),
+  save: (r: SafetyReport) => {
+    db.reports.set(r.id, r);
+    return r;
+  },
+};
+
+/* ── Chat timeouts ─────────────────────────────────────── */
+export const chatMutes = {
+  until: (streamId: string, userId: string) => db.chatMutes.get(`${streamId}>${userId}`),
+  isMuted: (streamId: string, userId: string) => {
+    const until = db.chatMutes.get(`${streamId}>${userId}`);
+    return Boolean(until && Date.parse(until) > Date.now());
+  },
+  set: (streamId: string, userId: string, until: string) => db.chatMutes.set(`${streamId}>${userId}`, until),
+  clear: (streamId: string, userId: string) => db.chatMutes.delete(`${streamId}>${userId}`),
 };
 
 /* ── Notifications ─────────────────────────────────────── */
@@ -647,6 +721,11 @@ const COLLECTIONS = [
   'verifications',
   'pushDevices',
   'broadcasts',
+  'addresses',
+  'follows',
+  'blocks',
+  'reports',
+  'chatMutes',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

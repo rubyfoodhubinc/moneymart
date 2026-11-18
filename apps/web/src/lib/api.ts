@@ -251,6 +251,9 @@ export interface NotifyStatus { delivery: { push: boolean; devices: number; topi
 export interface NotifyInput { title: string; body: string; audience: string; kind: 'announcement' | 'marketing'; href?: string }
 export interface VerificationRow { userId: string; handle: string; name: string; status: string; providerStatus: string; kind: 'person' | 'business'; startedAt: string; decidedAt: string | null; reason: string | null }
 export interface VerificationsAdmin { configured: { person: boolean; business: boolean; webhook: boolean }; required: boolean; rows: VerificationRow[] }
+export interface MarketCountry { code: string; name: string; flag: string; currency: string; currencySymbol?: string; buy: boolean; sell: boolean }
+export interface MarketsAdmin { countries: MarketCountry[]; usdPerUnit: Record<string, number>; ratesUpdatedAt: string | null; ratesSource: string; members?: Record<string, number> }
+export interface SafetyReportRow { id: string; kind: string; targetId: string; reason: string; note?: string; status: 'open' | 'actioned' | 'dismissed'; createdAt: string; reporter: string; target: string; resolution?: string }
 export interface AuditEntry { id: string; at: string; actor: string; action: string; target: string; detail: Record<string, unknown> }
 
 export const api = {
@@ -266,6 +269,14 @@ export const api = {
     request<{ ok: boolean; problem: string | null; recipients: number }>('/api/admin/notify', { method: 'POST', body: JSON.stringify({ ...input, preview: true }) }),
   sendNotify: (input: NotifyInput) => request<{ ok: boolean; broadcast: Broadcast }>('/api/admin/notify', { method: 'POST', body: JSON.stringify(input) }),
   adminVerifications: () => request<VerificationsAdmin>('/api/admin/verifications'),
+  adminMarkets: () => request<MarketsAdmin>('/api/admin/markets'),
+  saveMarkets: (countries: Record<string, { buy?: boolean; sell?: boolean }>) =>
+    request<MarketsAdmin>('/api/admin/markets', { method: 'PUT', body: JSON.stringify({ countries }) }),
+  adminReports: () => request<{ items: SafetyReportRow[] }>('/api/admin/reports'),
+  resolveReport: (id: string, status: 'actioned' | 'dismissed' | 'open', resolution?: string) =>
+    request<{ ok: boolean }>(`/api/admin/reports/${id}`, { method: 'POST', body: JSON.stringify({ status, resolution }) }),
+  follow: (userId: string, on: boolean) => request<{ following: boolean; followersCount?: number }>(`/api/users/${userId}/follow`, { method: on ? 'POST' : 'DELETE' }),
+  relationship: (userId: string) => request<{ following: boolean; blocked: boolean; followersCount?: number }>(`/api/users/${userId}/relationship`),
   adminAudit: (limit = 100) => request<{ entries: AuditEntry[] }>(`/api/admin/audit?limit=${limit}`),
   president: () => request<PresidentOffice>('/api/admin/president'),
   presidentChat: (thread = 'main') => request<{ lines: PresChatLine[] }>(`/api/admin/president/chat?thread=${encodeURIComponent(thread)}`),
