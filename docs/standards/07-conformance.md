@@ -99,4 +99,4 @@ The stand-in answers by who is speaking (the start of the system prompt) and wha
 
 ## 7.12 Verification and notifications (§8)
 
-Run `scripts/verify-notify.mjs`: stand-ins for Didit (HTTP) and Apple Push (HTTP/2) check starting and resuming a check, the decision on return, the webhook (bad signature, stale, unknown session, other member, replay refused), the Owner's verified-only switch, ES256 push tokens, badges, switches, dead tokens, order alerts and Owner messages. 57 checks.
+Run `scripts/verify-notify.mjs`: stand-ins for Didit (HTTP) and Apple Push (HTTP/2) check starting and resuming a check, the decision on return, the webhook (bad signature, stale, unknown session, other member, replay refused), the Owner's verified-only switch, ES256 push tokens, badges, switches, dead tokens, order alerts and Owner messages. 60 checks.

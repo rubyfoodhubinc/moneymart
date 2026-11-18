@@ -721,7 +721,9 @@ app.get('/api/auth/sessions', (req, res) => {
  */
 app.use((req: Request, res: Response, next: NextFunction) => {
   const token = bearerToken(req);
-  if (token && !authService.authenticate(token)) {
+  // RevenueCat sends its webhook secret as a Bearer value; it is not a member session, and the route checks it.
+  const isRevenueCatWebhook = req.path === '/api/webhooks/revenuecat';
+  if (token && !isRevenueCatWebhook && !authService.authenticate(token)) {
     res.status(401).json({ error: 'invalid_token', detail: 'The session token is expired or unknown.' });
     return;
   }
@@ -783,7 +785,10 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       req.path.startsWith('/api/dev/') ||
       req.path.startsWith('/api/auth/oauth/') ||
       // Didit has no member session; the route refuses anything without a valid signature (and 503 without a secret).
-      req.path === '/api/webhooks/didit';
+      req.path === '/api/webhooks/didit' ||
+      // RevenueCat checks its own Authorization secret; only exempt while that secret is configured, because the
+      // route accepts any caller when it is not.
+      (req.path === '/api/webhooks/revenuecat' && Boolean(process.env.REVENUECAT_WEBHOOK_SECRET));
 
     if (needsIdentity && !isSelfGated && !actorId(req)) {
       res.status(401).json({ error: 'not_authenticated', detail: 'Provide an Authorization: Bearer token.' });

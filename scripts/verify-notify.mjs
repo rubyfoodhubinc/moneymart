@@ -351,6 +351,36 @@ section('7. In production, Didit reaches the webhook without a member session');
   check(through.status === 200 && through.json?.reason === 'unknown_session', 'a signed call gets through');
   check((await post('/api/devices', '{}')).json?.error === 'not_authenticated', 'other routes still need a signed-in member');
   prod.kill('SIGKILL');
+
+  // RevenueCat: open only while its secret is set.
+  const start = async (port, extra) => {
+    const child = spawn(process.execPath, [entry], {
+      cwd: path.join(repoRoot, 'services', 'api'),
+      env: { ...process.env, PORT: String(port), NODE_ENV: 'production', MM_SEED: 'true', MM_PERSISTENCE: 'off', MM_OWNER_EMAILS: '', ...extra },
+      stdio: 'ignore',
+    });
+    for (let i = 0; i < 80; i += 1) {
+      try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) break; } catch { await sleep(250); }
+    }
+    return child;
+  };
+  const rc = async (port, auth) => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/webhooks/revenuecat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(auth ? { authorization: auth } : {}) },
+      body: JSON.stringify({ event: { type: 'TEST', id: `rc_${RUN}`, environment: 'PRODUCTION', app_user_id: 'usr_ken' } }),
+    });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+  const withSecret = await start(PROD_PORT + 1, { REVENUECAT_WEBHOOK_SECRET: 'rc-secret' });
+  const wrong = await rc(PROD_PORT + 1, 'Bearer nope');
+  check(wrong.status === 401 && wrong.json?.error === 'invalid_webhook_signature', 'RevenueCat with the wrong secret is refused by its own check');
+  const right = await rc(PROD_PORT + 1, 'Bearer rc-secret');
+  check(right.status === 200, 'RevenueCat with the right secret gets through', JSON.stringify(right.json).slice(0, 80));
+  withSecret.kill('SIGKILL');
+  const noSecret = await start(PROD_PORT + 2, { REVENUECAT_WEBHOOK_SECRET: '' });
+  check((await rc(PROD_PORT + 2, 'Bearer anything')).json?.error === 'not_authenticated', 'without a secret on the server, the RevenueCat route stays closed');
+  noSecret.kill('SIGKILL');
 }
 
 console.log(`\n  ${fail ? '\u001b[31m' : '\u001b[32m'}PASSED ${pass}   FAILED ${fail}\u001b[0m`);

@@ -5,7 +5,7 @@
 - New §8: member identity checks through a hosted provider page (Didit), signed webhook plus refresh on return, an Owner switch for verified sellers only.
 - One notification delivery path: inbox, live banner and iPhone push (APNs) with per-kind member switches; new automatic order alerts.
 - Owner messages to audiences or one member, with preview, offer opt-outs and audit.
-- Conformance: `verify-notify.mjs`, 57 checks (§7.12).
+- Conformance: `verify-notify.mjs`, 60 checks (§7.12).
 
 ## 1.2 — 2026-11-17
 
