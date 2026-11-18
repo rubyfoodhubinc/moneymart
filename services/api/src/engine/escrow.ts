@@ -209,14 +209,17 @@ export async function payOrder(params: {
     return { intent: confirmed, escrow: failed };
   }
 
+  // MoneyMart credit the buyer used is funded by MoneyMart and held alongside the card charge,
+  // so the seller's full payout is always covered by what escrow holds.
+  const credit = money.round2(order.creditApplied ?? 0);
   const held = orderEscrow.save({
     ...record,
-    heldAmount: money.round2(record.heldAmount + chargeAmount),
+    heldAmount: money.round2(record.heldAmount + chargeAmount + credit),
     provider: provider.id,
     chargeId: confirmed.id,
   });
 
-  const inEscrow = transition(held, 'in_escrow', actorId, `Funds held: ${order.currency} ${chargeAmount}`);
+  const inEscrow = transition(held, 'in_escrow', actorId, `Funds held: ${order.currency} ${chargeAmount}${credit ? ` + ${credit} MoneyMart credit` : ''}`);
   return { intent: { ...confirmed, orderId: order.id }, escrow: inEscrow };
 }
 

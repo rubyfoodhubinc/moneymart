@@ -34,6 +34,8 @@ final class SessionStore {
 
     /// Currency the signed-in member chose to see prices in (Settings › Country & currency).
     static var viewerCurrency: String?
+    /// Signed-in member's handle, for live-room events that name people.
+    static var currentHandle: String?
     var currency: String { user?.currencyCode ?? Locale.current.currency?.identifier ?? "USD" }
 
     func bootstrap() async {
@@ -48,7 +50,7 @@ final class SessionStore {
             let session = try await api.authSession()
             guard let user = session.user else { throw APIError(status: 401, code: "not_authenticated", message: "") }
             self.user = user
-            Self.viewerCurrency = user.currencyCode
+            Self.viewerCurrency = user.currencyCode; Self.currentHandle = user.handle
             status = .signedIn
             realtime.emit("user:join", user.id)
             await PushManager.shared.signedIn(userId: user.id)
@@ -110,7 +112,7 @@ final class SessionStore {
             await api.setToken(result.token)
             realtime.updateToken(result.token)
             user = result.user
-            Self.viewerCurrency = result.user.currencyCode
+            Self.viewerCurrency = result.user.currencyCode; Self.currentHandle = result.user.handle
             self.challenge = nil
             status = .signedIn
             realtime.emit("user:join", result.user.id)
@@ -141,7 +143,7 @@ final class SessionStore {
         defer { busy = false }
         do {
             let result = try await api.updateMe(patch)
-            if let updated = result.user { user = updated; Self.viewerCurrency = updated.currencyCode }
+            if let updated = result.user { user = updated; Self.viewerCurrency = updated.currencyCode; Self.currentHandle = updated.handle }
             return true
         } catch {
             self.error = error.localizedDescription
@@ -150,7 +152,7 @@ final class SessionStore {
     }
 }
 
-/// Device-local watchlist (Whatnot-style "save" on any lot or show).
+/// Watchlist: saved on the phone and on the account (synced after sign-in).
 @MainActor
 @Observable
 final class WatchlistStore {
@@ -164,7 +166,19 @@ final class WatchlistStore {
     func contains(_ id: String) -> Bool { ids.contains(id) }
 
     func toggle(_ id: String) {
-        if ids.contains(id) { ids.remove(id) } else { ids.insert(id) }
+        let on = !ids.contains(id)
+        if on { ids.insert(id) } else { ids.remove(id) }
+        UserDefaults.standard.set(Array(ids).sorted(), forKey: key)
+        // Saved to the account too, so the watchlist follows the member to every device.
+        Task { _ = try? await APIClient.shared.setWatched(id, on) }
+    }
+
+    /// After sign-in: merge what this phone saved with what the account has, both ways.
+    func sync() async {
+        guard let server = try? await APIClient.shared.serverWatchlist() else { return }
+        let remote = Set(server.ids)
+        for id in ids.subtracting(remote) { _ = try? await APIClient.shared.setWatched(id, true) }
+        ids.formUnion(remote)
         UserDefaults.standard.set(Array(ids).sorted(), forKey: key)
     }
 }

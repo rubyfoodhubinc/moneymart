@@ -58,7 +58,7 @@ struct OrderDetailView: View {
             ArtworkView(source: d.auction?.coverImage, symbol: "shippingbox.fill")
                 .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
-                Text(d.auction?.title ?? d.order.id).font(MM.Font.body(16, weight: .semibold)).foregroundStyle(MM.Color.ink).lineLimit(2)
+                Text(d.auction?.title ?? d.order.title ?? d.order.id).font(MM.Font.body(16, weight: .semibold)).foregroundStyle(MM.Color.ink).lineLimit(2)
                 let other = isBuyer ? d.seller : d.buyer
                 if let other { Text(isBuyer ? "Sold by @\(other.handle)" : "Bought by @\(other.handle)").font(MM.Font.body(13)).foregroundStyle(MM.Color.ink2) }
                 Text(Format.relative(d.order.createdAt)).font(MM.Font.body(12)).foregroundStyle(MM.Color.ink3)
@@ -107,6 +107,7 @@ struct OrderDetailView: View {
             if let premium = o.buyersPremium, premium > 0 { row("Buyer’s premium", premium, o.currency) }
             row("Shipping", o.shipping ?? 0, o.currency, note: o.shippingNote)
             if let tax = o.tax, tax > 0 { row("Tax", tax, o.currency) }
+            if let credit = o.creditApplied, credit > 0 { row("MoneyMart credit", -credit, o.currency) }
             Divider().overlay(MM.Color.divider)
             HStack {
                 Text("Total").font(MM.Font.body(15, weight: .bold)).foregroundStyle(MM.Color.ink)
@@ -148,6 +149,12 @@ struct OrderDetailView: View {
     private func actions(_ o: Order) -> some View {
         VStack(spacing: 10) {
             if isBuyer {
+                if o.paymentStatus != "paid" && o.paymentStatus != "refunded" && (o.creditApplied ?? 0) == 0 && credit > 0 {
+                    Button { Task { await act { _ = try await APIClient.shared.applyCredit(orderId: orderId); return OkOrCreated() } done: { String(localized: "Credit applied.") } } } label: {
+                        Text("Use \(Format.money(credit, "USD")) credit").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.glass).disabled(working).accessibilityIdentifier("order-credit")
+                }
                 if o.paymentStatus != "paid" && o.paymentStatus != "refunded" {
                     Button { confirmPay = true } label: { Text("Pay \(Format.money(o.totalAmount, o.currency))").frame(maxWidth: .infinity) }
                         .buttonStyle(.gold).disabled(working).accessibilityIdentifier("order-pay")
@@ -172,15 +179,23 @@ struct OrderDetailView: View {
     }
 
     private var protection: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "checkmark.shield.fill").foregroundStyle(MM.Color.gold)
-            Text("MoneyMart Protection: payment is held until the buyer confirms the item arrived as described. Problems can be raised from this screen.")
-                .font(MM.Font.body(12)).foregroundStyle(MM.Color.ink3)
+        NavigationLink(value: Router.Route.protection) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "checkmark.shield.fill").foregroundStyle(MM.Color.gold)
+                Text("MoneyMart Protection: payment is held until the buyer confirms the item arrived as described. Problems can be raised from this screen.")
+                    .font(MM.Font.body(12)).foregroundStyle(MM.Color.ink3)
+                    .multilineTextAlignment(.leading)
+                Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(MM.Color.ink3)
+            }
         }
+        .buttonStyle(.plain)
     }
+
+    @State private var credit: Double = 0
 
     private func load() async {
         do { detail = try await APIClient.shared.order(id: orderId); error = nil } catch { self.error = error.localizedDescription }
+        if isBuyer, detail?.order.paymentStatus != "paid" { credit = (try? await APIClient.shared.coinWallet().creditUSD) ?? 0 }
     }
 
     private func act(_ call: () async throws -> OkOrCreated, done: () -> String) async {

@@ -48,6 +48,14 @@ final class StreamRoom {
     var reminded = false
     /// The message the host or a moderator pinned.
     var pinned: ChatMessage?
+    /// The show's current (or last drawn) Prize Drop.
+    var giveaway: Giveaway?
+    /// Emoji floating up the screen right now.
+    var bursts: [ReactionBurst] = []
+    /// Short room lines: "@ana joined", tips, first purchases, Prize Drop winners.
+    var ticker: [RoomLine] = []
+    /// Coins earned watching this show (Watch & Earn).
+    var coinsEarned = 0
 
     @ObservationIgnored private var subscriptions: [RealtimeSubscription] = []
 
@@ -61,6 +69,7 @@ final class StreamRoom {
             pinned = detail.chat.last(where: { $0.isPinned == true })
             queue = detail.queue
             reminded = detail.reminded ?? false
+            giveaway = (try? await APIClient.shared.giveaways(streamId: streamId))?.items.first
             await focus(on: detail.stream.activeAuctionId ?? detail.stream.activeAuction?.id)
             attach()
         } catch {
@@ -114,7 +123,7 @@ final class StreamRoom {
                 self.stream?.status = "ended"
                 self.stream?.liveVideoProvider = nil
             },
-        ]
+        ] + engagementSubscriptions()
     }
 
     /// Host or one of the show's moderators.
@@ -211,6 +220,13 @@ struct StreamView: View {
     @State private var showShop = false
     @State private var showQuote = false
     @State private var reportTarget: ChatMessage?
+    @State private var showReactions = false
+    @State private var showTip = false
+    @State private var showPrize = false
+    @State private var showClip = false
+    @State private var prizeError: String?
+    @State private var showPrizeAddress = false
+    @State private var openedAt = Date()
     @Environment(SessionStore.self) private var session
     @Environment(BuyerState.self) private var buyer
     @Environment(Router.self) private var router
@@ -266,10 +282,18 @@ struct StreamView: View {
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         .background(.ultraThinMaterial, in: Capsule())
                 }
+                if !room.ticker.isEmpty { RoomTicker(lines: room.ticker) }
+                if showReactions {
+                    ReactionBar { e in RequiresSignIn.run(session, router) { Task { await room.react(e) } } }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
                 composer
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 6)
+
+            RoomEffects(room: room)
 
             if room.stream?.status == "ended" { endedCard }
 
@@ -280,6 +304,7 @@ struct StreamView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .task { await room.load() }
+        .task(id: session.user?.id) { if session.user != nil { await room.watchAndEarn() } }
         .task(id: broadcastKey) { await joinVideo() }
         .onDisappear {
             video.stop()
@@ -300,6 +325,14 @@ struct StreamView: View {
                     .presentationDetents([.medium])
             }
         }
+        .sheet(isPresented: $showTip) {
+            if let host = room.stream?.creator {
+                TipSheet(streamId: streamId, hostHandle: host.handle, currency: Markets.shared.country(host.countryCode)?.currency ?? "USD")
+            }
+        }
+        .sheet(isPresented: $showPrize) { HostPrizeSheet(room: room) }
+        .sheet(isPresented: $showPrizeAddress) { ShippingInfoSheet { Task { prizeError = await room.enterGiveaway() } } }
+        .sheet(isPresented: $showClip) { ClipSheet(streamId: streamId, secondsIn: Int(Date().timeIntervalSince(openedAt))) }
         .sheet(item: $reportTarget) { message in
             ReportSheet(kind: "message", targetId: message.id, contextId: streamId, subject: message.displayName)
         }
@@ -358,6 +391,23 @@ struct StreamView: View {
     @ViewBuilder
     private var roomBanners: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let g = room.giveaway, g.isOpen || g.youWon || g.winnerHandle != nil {
+                PrizeDropCard(giveaway: g, onEnter: {
+                    RequiresSignIn.run(session, router) {
+                        Task {
+                            prizeError = await room.enterGiveaway()
+                            if prizeError?.contains("shipping address") == true { prizeError = nil; showPrizeAddress = true }
+                        }
+                    }
+                }, onOpenOrder: { id in router.profilePath = [.orders, .order(id)]; router.tab = .profile })
+                if let prizeError { Text(prizeError).font(MM.Font.body(11, weight: .semibold)).foregroundStyle(.white).padding(.horizontal, 10).padding(.vertical, 4).background(MM.Color.errorText.opacity(0.8), in: Capsule()) }
+            }
+            if room.coinsEarned > 0 {
+                Label("+\(room.coinsEarned) coins watching", systemImage: "circle.hexagongrid.fill")
+                    .font(MM.Font.body(11, weight: .semibold)).foregroundStyle(MM.Color.gold)
+                    .padding(.horizontal, 10).padding(.vertical, 5).background(.black.opacity(0.45), in: Capsule())
+                    .accessibilityIdentifier("watch-earn")
+            }
             if room.stream?.explicit == true {
                 Label("This show may contain mature content", systemImage: "exclamationmark.triangle.fill")
                     .font(MM.Font.body(11, weight: .semibold)).foregroundStyle(.white)
@@ -481,6 +531,30 @@ struct StreamView: View {
                     .frame(width: 42, height: 42).background(MM.Gradient.gold, in: Circle())
             }
             .accessibilityLabel("Send message")
+            Menu {
+                if room.canModerate(session.user?.id) {
+                    Button { showPrize = true } label: { Label("Prize Drop", systemImage: "gift.fill") }
+                } else if room.stream?.creator != nil {
+                    Button { RequiresSignIn.run(session, router) { showTip = true } } label: { Label("Send a tip", systemImage: "dollarsign.circle.fill") }
+                }
+                if room.stream?.isLive == true {
+                    Button { RequiresSignIn.run(session, router) { showClip = true } } label: { Label("Clip this moment", systemImage: "scissors") }
+                }
+                if let url = room.stream?.shareUrl.flatMap(URL.init(string:)) {
+                    ShareLink(item: url) { Label("Share show", systemImage: "square.and.arrow.up") }
+                }
+            } label: {
+                Image(systemName: "ellipsis").foregroundStyle(.white)
+                    .frame(width: 42, height: 42).background(.ultraThinMaterial, in: Circle())
+            }
+            .accessibilityLabel("More")
+            .accessibilityIdentifier("stream-more")
+            Button { withAnimation(.spring(duration: 0.3)) { showReactions.toggle() } } label: {
+                Image(systemName: "heart.fill").foregroundStyle(.white)
+                    .frame(width: 42, height: 42).background(.ultraThinMaterial, in: Circle())
+            }
+            .accessibilityLabel("React")
+            .accessibilityIdentifier("stream-react")
         }
     }
 

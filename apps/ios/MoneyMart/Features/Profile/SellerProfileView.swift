@@ -145,12 +145,15 @@ struct SellerProfileView: View {
     @State private var error: String?
     @State private var reporting = false
     @State private var confirmBlock = false
+    @State private var ranks: RanksResponse?
+    @State private var club: ClubInfo?
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
                 if let detail, let model {
                     header(detail.profile, model)
+                    extras
                     Picker("", selection: $tab) {
                         Text("Shop").tag(0)
                         Text("Shows").tag(1)
@@ -219,8 +222,53 @@ struct SellerProfileView: View {
             .foregroundStyle(MM.Color.ink)
             .padding(.vertical, 10).mmCard()
             if p.id != session.user?.id {
-                FollowButton(model: model, identifier: "seller-follow")
+                HStack(spacing: 10) {
+                    FollowButton(model: model, identifier: "seller-follow")
+                    Button { RequiresSignIn.run(session, router) { router.profilePath.append(.thread(p.id)); router.tab = .profile } } label: {
+                        Label("Message", systemImage: "bubble.left.fill").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("seller-message")
+                }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var extras: some View {
+        if let vacation = ranks?.vacation, vacation.on {
+            Label(vacation.message ?? String(localized: "This seller is away right now. New items and offers are paused."), systemImage: "sun.max.fill")
+                .font(MM.Font.body(13, weight: .semibold)).foregroundStyle(MM.Color.ink)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(12).mmCard()
+                .accessibilityIdentifier("seller-vacation")
+        }
+        if let items = ranks?.items, !items.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(items.prefix(4)) { r in
+                        Pill(text: LocalizedStringKey("#\(r.rank) " + String(localized: "in \(r.label)")), systemImage: "trophy.fill", tint: MM.Color.gold)
+                    }
+                }
+            }
+            .accessibilityIdentifier("seller-ranks")
+        }
+        if let club, detail?.profile.id != session.user?.id {
+            HStack(spacing: 10) {
+                Image(systemName: "crown.fill").foregroundStyle(MM.Color.gold)
+                VStack(alignment: .leading, spacing: 2) {
+                    if let tier = club.you?.tier {
+                        Text("You’re in the \(tier.label) club").font(MM.Font.body(14, weight: .semibold)).foregroundStyle(MM.Color.ink)
+                        if let perk = tier.perk { Text(perk).font(MM.Font.body(12)).foregroundStyle(MM.Color.ink2) }
+                    } else {
+                        Text("Rewards club").font(MM.Font.body(14, weight: .semibold)).foregroundStyle(MM.Color.ink)
+                        Text("Buy from this seller to join Bronze, Silver and Gold.").font(MM.Font.body(12)).foregroundStyle(MM.Color.ink2)
+                    }
+                }
+                Spacer()
+                Text("\(club.tiers.reduce(0) { $0 + $1.members }) " + String(localized: "members")).font(MM.Font.body(11)).foregroundStyle(MM.Color.ink3)
+            }
+            .padding(12).mmCard()
+            .accessibilityIdentifier("seller-club")
         }
     }
 
@@ -231,6 +279,8 @@ struct SellerProfileView: View {
             if model == nil { model = FollowModel(userId: d.profile.id, followers: d.profile.followersCount ?? 0) }
             if session.isSignedIn { await model?.load() }
             shows = (try? await APIClient.shared.streams(creator: d.profile.id).items.filter { $0.status != "ended" }) ?? []
+            ranks = try? await APIClient.shared.ranks(userId: d.profile.id)
+            club = try? await APIClient.shared.club(sellerId: d.profile.id)
             error = nil
         } catch { self.error = error.localizedDescription }
     }

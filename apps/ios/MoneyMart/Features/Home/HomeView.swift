@@ -150,9 +150,7 @@ struct HomeView: View {
                 HStack(spacing: 10) {
                     ForEach(Catalog.categories) { category in
                         Button {
-                            router.discoverPath = []
-                            DiscoverView.pendingCategory = category.id
-                            router.tab = .discover
+                            router.homePath = [.category(category.id)]
                         } label: {
                             VStack(spacing: 8) {
                                 Image(systemName: category.symbol).font(.system(size: 22, weight: .semibold)).foregroundStyle(MM.Color.gold)

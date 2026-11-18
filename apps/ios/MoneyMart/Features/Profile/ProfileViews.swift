@@ -91,6 +91,16 @@ struct ProfileView: View {
                 .accessibilityIdentifier("profile-orders")
             NavigationLink(value: Router.Route.addresses) { row("house.fill", "Addresses") }
                 .accessibilityIdentifier("profile-addresses")
+            NavigationLink(value: Router.Route.messages) { row("bubble.left.and.bubble.right.fill", "Messages") }
+                .accessibilityIdentifier("profile-messages")
+            NavigationLink(value: Router.Route.offers) { row("tag.fill", "Offers") }
+                .accessibilityIdentifier("profile-offers")
+            NavigationLink(value: Router.Route.rewards) { row("gift.fill", "Rewards & invites") }
+                .accessibilityIdentifier("profile-rewards")
+            if session.user?.sellerProfile != nil {
+                NavigationLink(value: Router.Route.studio) { row("chart.bar.xaxis", "Seller Studio") }
+                    .accessibilityIdentifier("profile-studio")
+            }
             NavigationLink(value: Router.Route.wallet) { row("creditcard.fill", "Wallet & payouts") }
             NavigationLink(value: Router.Route.watchlist) { row("heart.fill", "Watchlist") }
             NavigationLink(value: Router.Route.notifications) { row("bell.fill", "Notifications", badge: unread > 0 ? "\(unread)" : nil) }
@@ -99,6 +109,7 @@ struct ProfileView: View {
                 row("checkmark.seal.fill", "Verification", badge: session.user?.verificationStatus == "verified" ? String(localized: "Verified") : nil)
             }
             .accessibilityIdentifier("profile-verification")
+            NavigationLink(value: Router.Route.protection) { row("checkmark.shield.fill", "Buyer protection") }
             NavigationLink(value: Router.Route.settings) { row("gearshape.fill", "Settings") }
         }
         .mmCard()

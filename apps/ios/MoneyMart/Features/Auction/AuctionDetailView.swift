@@ -7,6 +7,7 @@ struct AuctionDetailView: View {
     @State private var controller: BidController
     @State private var showBid = false
     @State private var confirmBuy = false
+    @State private var showOffer = false
     @State private var page = 0
     @State private var translate = false
     @Environment(SessionStore.self) private var session
@@ -46,6 +47,7 @@ struct AuctionDetailView: View {
         .task { await controller.load() }
         .onDisappear { controller.detach() }
         .sheet(isPresented: $showBid) { BidSheet(controller: controller).presentationDetents([.medium, .large]) }
+        .sheet(isPresented: $showOffer) { if let auction = controller.auction { MakeOfferSheet(auction: auction) } }
         .sheet(isPresented: Binding(get: { controller.needsShippingInfo && !showBid }, set: { if !$0 { controller.needsShippingInfo = false } })) {
             ShippingInfoSheet { Task { await controller.resumeAfterShippingInfo() } }
         }
@@ -307,6 +309,11 @@ struct AuctionDetailView: View {
                         Button("Cancel", role: .cancel) {}
                     } message: {
                         Text("All sales are final. You’ll pay and choose shipping in your orders.")
+                    }
+                    if auction.sellerId != session.user?.id {
+                        Button { RequiresSignIn.run(session, router) { showOffer = true } } label: { Label("Offer", systemImage: "tag") }
+                            .buttonStyle(.glassCompact)
+                            .accessibilityIdentifier("lot-offer")
                     }
                 }
                 Button {

@@ -25,6 +25,7 @@ struct User: Codable, Hashable, Identifiable, Sendable {
     var preferences: UserPreferences?
     /// Present once seller setup is finished; private to the account owner.
     var sellerProfile: SellerProfile?
+    var vacation: Vacation?
 }
 
 struct PostalAddress: Codable, Hashable, Sendable {
@@ -308,6 +309,9 @@ struct Order: Codable, Hashable, Identifiable, Sendable {
     var orderStatus: String
     var trackingNumber: String?
     var courierName: String?
+    var title: String?
+    var source: String?
+    var creditApplied: Double?
     var createdAt: String
     var auction: Auction?
     var counterparty: PublicProfile?

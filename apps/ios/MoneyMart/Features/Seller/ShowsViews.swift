@@ -9,6 +9,7 @@ struct MyShowsView: View {
     @State private var showSchedule = false
     @State private var showWizard = false
     @State private var segment = 0
+    @State private var promoting: LiveStream?
 
     var body: some View {
         ScrollView {
@@ -41,6 +42,11 @@ struct MyShowsView: View {
                             ShowManagerView(streamId: show.id, onChange: { Task { await load() } })
                         } label: { ShowRow(show: show) }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            if show.status != "ended" {
+                                Button { promoting = show } label: { Label("Promote this show", systemImage: "megaphone.fill") }
+                            }
+                        }
                     }
                 }
             }
@@ -61,6 +67,7 @@ struct MyShowsView: View {
         }
         .sheet(isPresented: $showSchedule) { ScheduleShowSheet { _ in Task { await load() } } }
         .sheet(isPresented: $showWizard) { ScheduleWizard { _ in Task { await load() } } }
+        .sheet(item: $promoting) { show in PromoteSheet(kind: "stream", targetId: show.id, title: show.title) }
         .mmScreen()
         .task { await load() }
     }

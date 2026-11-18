@@ -35,6 +35,7 @@ struct MoneyMartApp: App {
                 .task { await ore.refreshStatus() }
                 .task { PushManager.shared.configure(router: router) }
                 .task { await Markets.shared.load() }
+                .task(id: session.user?.id) { if session.user != nil { await watchlist.sync() } }
                 .onOpenURL { router.open($0) }
         }
     }
@@ -72,7 +73,7 @@ private extension UIFont {
 @Observable
 final class Router {
     enum Tab: Hashable { case home, discover, live, sell, profile }
-    enum Route: Hashable { case auction(String), stream(String), notifications, orders, wallet, watchlist, settings, verification, order(String), addresses, seller(String) }
+    enum Route: Hashable { case auction(String), stream(String), notifications, orders, wallet, watchlist, settings, verification, order(String), addresses, seller(String), studio, category(String), rewards, offers, messages, thread(String), protection }
 
     var tab: Tab = .home
     var homePath: [Route] = []
@@ -113,6 +114,12 @@ final class Router {
             tab = .profile; profilePath = id == "wallet" ? [.wallet] : id == "selling" ? [.orders] : []
         case "verification":
             tab = .profile; profilePath = [.verification]
+        case "messages":
+            tab = .profile; profilePath = id.isEmpty ? [.messages] : [.messages, .thread(id)]
+        case "offers":
+            tab = .profile; profilePath = [.offers]
+        case "rewards":
+            tab = .profile; profilePath = [.rewards]
         default:
             tab = .profile; profilePath = [.notifications]
         }
@@ -186,6 +193,13 @@ extension View {
             case .order(let id): OrderDetailView(orderId: id)
             case .addresses: AddressesView()
             case .seller(let handle): SellerProfileView(handle: handle)
+            case .studio: SellerStudioView()
+            case .category(let id): CategoryFeedView(categoryId: id)
+            case .rewards: RewardsView()
+            case .offers: OffersView()
+            case .messages: MessagesView()
+            case .thread(let userId): ThreadView(userId: userId)
+            case .protection: BuyerProtectionView()
             }
         }
     }

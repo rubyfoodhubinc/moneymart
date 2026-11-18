@@ -407,6 +407,62 @@ final class MoneyMartUITests: XCTestCase {
         }
     }
 
+    func testPrizeDropReactionsRewardsAndCategoryPage() async throws {
+        try await prepareLocalGateway()
+        // The host starts a Prize Drop that everyone can enter.
+        try await dev("/api/streams/str_adaluxe/giveaways", ["title": "QA mystery box", "followersOnly": false], as: "usr_ada")
+        app.buttons["welcome-skip"].tap()
+        try signIn("qa.waveb@moneymart.test")
+
+        openShow("str_adaluxe")
+        let card = element("prize-drop")
+        XCTAssertTrue(card.waitForExistence(timeout: 15), "the Prize Drop shows in the live room")
+        keep("Live - Prize Drop")
+        app.buttons["prize-enter"].tap()
+        addAddressIfAsked()
+        if app.buttons["prize-enter"].waitForExistence(timeout: 5) { app.buttons["prize-enter"].tap() }
+        XCTAssertTrue(app.staticTexts["Entered"].waitForExistence(timeout: 10), "a viewer with an address enters")
+        keep("Live - entered")
+
+        app.buttons["stream-react"].tap()
+        XCTAssertTrue(element("reaction-bar").waitForExistence(timeout: 5), "reactions open")
+        app.buttons["🔥"].tap()
+        keep("Live - reactions")
+        app.buttons["stream-more"].tap()
+        XCTAssertTrue(app.buttons["Send a tip"].waitForExistence(timeout: 5), "viewers can tip the host")
+        app.buttons["Send a tip"].tap()
+        XCTAssertTrue(app.buttons["tip-send"].waitForExistence(timeout: 5))
+        keep("Live - tip")
+        app.buttons["Cancel"].firstMatch.tap()
+        let back = app.buttons["Back"]
+        if back.waitForExistence(timeout: 5) { back.tap() }
+
+        // Rewards, messages.
+        app.tabBars.buttons["Profile"].tap()
+        let rewards = app.buttons["profile-rewards"]
+        scrollTo(rewards)
+        rewards.tap()
+        XCTAssertTrue(element("rewards-coins").waitForExistence(timeout: 10), "coins and credit")
+        XCTAssertTrue(element("referral-code").waitForExistence(timeout: 10) || { scrollTo(element("referral-code")); return element("referral-code").exists }(), "an invite code to share")
+        keep("Rewards")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let messages = app.buttons["profile-messages"]
+        scrollTo(messages)
+        messages.tap()
+        XCTAssertTrue(app.navigationBars["Messages"].waitForExistence(timeout: 10))
+        keep("Messages")
+
+        // Category page from Home.
+        app.tabBars.buttons["Home"].tap()
+        let category = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Watches'")).firstMatch
+        scrollTo(category)
+        if category.exists {
+            category.tap()
+            XCTAssertTrue(element("category-sort").waitForExistence(timeout: 10), "a category has its own page with sorting")
+            keep("Category page")
+        }
+    }
+
     private func openShow(_ id: String) {
         app.tabBars.buttons["Live"].tap()
         // The Live tab may still be showing the room from before.
@@ -430,11 +486,12 @@ final class MoneyMartUITests: XCTestCase {
         save.tap()
     }
 
-    private func dev(_ path: String, _ body: [String: Any]) async throws {
+    private func dev(_ path: String, _ body: [String: Any], as user: String? = nil) async throws {
         guard let raw = ProcessInfo.processInfo.environment["MM_API_URL"], let base = URL(string: raw) else { return }
         var request = URLRequest(url: base.appending(path: path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let user { request.setValue(user, forHTTPHeaderField: "x-mm-user") }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         _ = try await URLSession.shared.data(for: request)
     }

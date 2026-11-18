@@ -102,6 +102,10 @@ struct DiscoverView: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
+                    if let category {
+                        NavigationLink(value: Router.Route.category(category)) { chipLabel("Category page", selected: false, systemImage: "square.grid.2x2.fill") }
+                            .accessibilityIdentifier("discover-category-page")
+                    }
                     chip("All categories", selected: category == nil) { category = nil }
                     ForEach(Catalog.categories) { item in
                         Button { category = category == item.id ? nil : item.id } label: {

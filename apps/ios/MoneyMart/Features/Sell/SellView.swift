@@ -326,6 +326,9 @@ struct SellView: View {
                     NavigationLink { MyShowsView() } label: { Label("My shows", systemImage: "calendar") }
                         .buttonStyle(.goldCompact)
                         .accessibilityIdentifier("studio-shows")
+                    NavigationLink(value: Router.Route.studio) { Label("Orders & payouts", systemImage: "chart.bar.xaxis") }
+                        .buttonStyle(.glass)
+                        .accessibilityIdentifier("studio-open")
                     if session.user?.verificationStatus != "verified" {
                         NavigationLink(value: Router.Route.verification) { Label("Get verified", systemImage: "checkmark.seal") }
                             .buttonStyle(.glass)

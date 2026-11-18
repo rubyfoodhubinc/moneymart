@@ -173,11 +173,14 @@ const credited = await call(`/api/orders/${fanOrder.id}/apply-credit`, { method:
 check(credited.status === 200 && credited.json?.order?.creditApplied === 5 && Math.abs(credited.json.order.totalAmount - (fanOrder.totalAmount - 5)) < 0.01, 'credit comes off an unpaid order', `${fanOrder.totalAmount} → ${credited.json?.order?.totalAmount}`);
 check((await call(`/api/orders/${fanOrder.id}/apply-credit`, { method: 'POST', user: fan.id })).status === 409, 'credit is used once per order');
 check((await pay(fanOrder.id, fan.id)).status === 200, 'the reduced total is paid');
+await call(`/api/orders/${fanOrder.id}/status`, { method: 'POST', user: host.id, body: { orderStatus: 'shipped', trackingNumber: 'TRK5678' } });
+const creditedRelease = await call(`/api/orders/${fanOrder.id}/confirm`, { method: 'POST', user: fan.id });
+check(creditedRelease.status === 200, 'a credited order releases the seller’s full payout', String(creditedRelease.status));
 
 /* ── 5 ── */
 section('5. Seller Studio, clubs, leaderboards, commission');
 const studio = (await call('/api/seller/studio', { user: host.id })).json;
-check(studio?.toShip?.some((o) => o.id === fanOrder.id) && studio.toShip.some((o) => o.id === fan2Order.id), 'orders to ship list the paid orders', `${studio?.toShip?.length}`);
+check(studio?.toShip?.some((o) => o.id === fan2Order.id) && !studio.toShip.some((o) => o.id === fanOrder.id), 'orders to ship list paid orders, not delivered ones', `${studio?.toShip?.length}`);
 check(studio?.health?.metrics?.length === 4 && studio.health.metrics.every((m) => m.value >= 0 && m.value <= 100), 'account health shows four measures');
 check(studio?.commission?.tier?.id === 'starter' && studio.commission.tier.rate === 0.1 && studio.commission.tiers.at(-1).rate === 0.08, 'commission starts at 10% and goes down to 8%');
 check(studio?.commission?.byCategory?.find((c) => c.id === 'watches')?.rate === 0.12, 'luxury categories cost two points more');

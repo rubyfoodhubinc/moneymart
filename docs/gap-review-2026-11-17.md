@@ -29,17 +29,24 @@ notifications + iPhone push · Didit seller verification · Ore + President Ore 
 | A9 | Live room missing states | Show ended screen + upcoming shows, share while live, pinned message, show notes, explicit warning, winner name ("X is winning / X won"), host pin from iPhone |
 | A10 | Fake numbers | Remove random viewer drift for real shows; seller earnings from real orders only |
 
-### Wave B — engagement and seller tools
+### Wave B — engagement and seller tools ✅ done 17 Nov (engagement.ts; verify-engagement.mjs; iPhone test testPrizeDropReactionsRewardsAndCategoryPage)
 Prize Drop (giveaways: enter, draw, free order) · tips · reactions burst, join lines, first-purchase celebration,
 Mod badges · Seller Studio on iPhone: orders to ship (add tracking), payouts, account health (on-time shipping,
 refund-free, cancellation-free, response rate), commission by category · Categories tab + category page (live now,
 sort Popular / New / Buy It Now) · scheduled cards with start time + remind · watchlist saved to the account.
 
-### Wave C — growth
+### Wave C — growth ✅ server + iPhone done 17 Nov (growth.ts, engine/commission.ts) — two items left, see below
 Watch & Earn coins, challenges, rewards shop, per-seller rewards club tiers · referrals & credits · offers
 (make / accept / counter) · clips · leaderboards ("#N in category") · friends & direct messages · buyer
 protection policy pages with claim windows by category · gated categories · tiered commission (from 8%) ·
 promotions/boost · vacation mode · web seller onboarding, scheduling and host console · mini-player for live video.
+
+Wave C notes:
+- Clips save the moment and a share link; they play once show recordings are switched on (no recording yet).
+- Tips and promotions are charged like other payments — simulated until real card payments are live.
+- Gated categories are empty by default; the Owner picks them in console › Settings (`categories.gated`).
+- **Not built yet:** web seller onboarding / scheduling / host console (sellers use the iPhone app), and the
+  mini-player for live video.
 
 ### Countries and currencies ✅ done 17 Nov
 13 countries with their currencies; the Owner opens or closes each one for buying and for selling (console ›
