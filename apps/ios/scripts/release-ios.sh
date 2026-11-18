@@ -57,6 +57,17 @@ xcodebuild -project MoneyMart.xcodeproj -scheme MoneyMart -configuration Release
 # 3. Optional upload to App Store Connect (TestFlight only; no review submission).
 if [ "${UPLOAD:-0}" = 1 ]; then
   EXPORT_OPTIONS=$DATA/ExportOptions-AppStore.plist
+  # The API key cannot use Apple's cloud-managed distribution signing, so a store profile is made with this
+  # Mac's Apple Distribution certificate (scripts/asc.py store-profile) and named here. STORE_PROFILE overrides.
+  if [ -z "${STORE_PROFILE:-}" ]; then
+    SERIAL=$(security find-certificate -c "Apple Distribution: RUBYNAV INC" -p 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2)
+    [ -n "$SERIAL" ] && STORE_PROFILE=$(CERT_SERIAL=$SERIAL python3 "$(dirname "$0")/asc.py" store-profile com.rubynav.moneymart 2>>$LOG || true)
+  fi
+  if [ -n "${STORE_PROFILE:-}" ]; then
+    SIGNING="<key>signingStyle</key><string>manual</string><key>signingCertificate</key><string>Apple Distribution</string><key>provisioningProfiles</key><dict><key>com.rubynav.moneymart</key><string>$STORE_PROFILE</string></dict>"
+  else
+    SIGNING="<key>signingStyle</key><string>automatic</string>"
+  fi
   cat > $EXPORT_OPTIONS <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -64,7 +75,7 @@ if [ "${UPLOAD:-0}" = 1 ]; then
   <key>method</key><string>app-store-connect</string>
   <key>destination</key><string>upload</string>
   <key>teamID</key><string>$TEAM</string>
-  <key>signingStyle</key><string>automatic</string>
+  $SIGNING
   <key>uploadSymbols</key><true/>
   <key>manageAppVersionAndBuildNumber</key><false/>
 </dict></plist>
