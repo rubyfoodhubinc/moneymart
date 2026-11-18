@@ -326,6 +326,33 @@ check(status.json?.history?.[0]?.title === 'Seller week' && status.json.delivery
 const auditLog = await call('/api/admin/audit', { user: OWNER });
 check(JSON.stringify(auditLog.json).includes('notify.send'), 'every send is in the audit log');
 
+/* ── 7 ── */
+section('7. In production, Didit reaches the webhook without a member session');
+{
+  const PROD_PORT = PORT + 3;
+  const prod = spawn(process.execPath, [entry], {
+    cwd: path.join(repoRoot, 'services', 'api'),
+    env: { ...process.env, PORT: String(PROD_PORT), NODE_ENV: 'production', MM_SEED: 'true', MM_PERSISTENCE: 'off', DIDIT_WEBHOOK_SECRET: WEBHOOK_SECRET, MM_OWNER_EMAILS: '' },
+    stdio: 'ignore',
+  });
+  const base = `http://127.0.0.1:${PROD_PORT}`;
+  let ready = false;
+  for (let i = 0; i < 80 && !ready; i += 1) {
+    try { ready = (await fetch(`${base}/api/health`)).ok; } catch { await sleep(250); }
+  }
+  const post = async (p, raw, headers = {}) => {
+    const r = await fetch(`${base}${p}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: raw });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+  const unsigned = await post('/api/webhooks/didit', '{"session_id":"x"}');
+  check(unsigned.status === 401 && unsigned.json?.error === 'bad_signature', 'an unsigned call is refused by the signature check, not the sign-in gate');
+  const signed = envelope({ event_id: `evt_prod_${RUN}`, session_id: 'unknown', status: 'Approved' });
+  const through = await post('/api/webhooks/didit', signed.raw, signed.headers);
+  check(through.status === 200 && through.json?.reason === 'unknown_session', 'a signed call gets through');
+  check((await post('/api/devices', '{}')).json?.error === 'not_authenticated', 'other routes still need a signed-in member');
+  prod.kill('SIGKILL');
+}
+
 console.log(`\n  ${fail ? '\u001b[31m' : '\u001b[32m'}PASSED ${pass}   FAILED ${fail}\u001b[0m`);
 if (fail) {
   console.log(`\n  Failed:\n${failures.map((f) => `   - ${f}`).join('\n')}`);

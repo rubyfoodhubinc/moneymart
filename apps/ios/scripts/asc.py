@@ -78,6 +78,21 @@ def main() -> None:
         created = post("bundleIds", {"data": {"type": "bundleIds", "attributes": {
             "identifier": value, "name": os.environ.get("BUNDLE_NAME", "MoneyMart"), "platform": "IOS"}}})
         print(created["id"])
+    elif command == "enable-push":
+        # Idempotent: switches on Push Notifications for the bundle id (value = identifier).
+        ids = get("bundleIds", {"filter[identifier]": value, "fields[bundleIds]": "identifier"})
+        match = [b for b in ids if b["attributes"]["identifier"] == value]
+        if not match:
+            sys.exit(2)
+        bundle_id = match[0]["id"]
+        caps = get(f"bundleIds/{bundle_id}/bundleIdCapabilities", {})
+        if any(c["attributes"]["capabilityType"] == "PUSH_NOTIFICATIONS" for c in caps):
+            print("already on")
+            return
+        post("bundleIdCapabilities", {"data": {"type": "bundleIdCapabilities",
+            "attributes": {"capabilityType": "PUSH_NOTIFICATIONS"},
+            "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bundle_id}}}}})
+        print("enabled")
     elif command == "next-build":
         builds = get("builds", {"filter[app]": value, "limit": 200, "fields[builds]": "version"})
         numbers = [int(b["attributes"]["version"]) for b in builds if b["attributes"]["version"].isdigit()]

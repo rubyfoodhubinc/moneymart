@@ -781,7 +781,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     const isSelfGated =
       req.path === '/api/session' ||
       req.path.startsWith('/api/dev/') ||
-      req.path.startsWith('/api/auth/oauth/');
+      req.path.startsWith('/api/auth/oauth/') ||
+      // Didit has no member session; the route refuses anything without a valid signature (and 503 without a secret).
+      req.path === '/api/webhooks/didit';
 
     if (needsIdentity && !isSelfGated && !actorId(req)) {
       res.status(401).json({ error: 'not_authenticated', detail: 'Provide an Authorization: Bearer token.' });

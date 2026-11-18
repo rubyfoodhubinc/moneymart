@@ -2,7 +2,7 @@
 
 Version 1.3. Reference implementation: MoneyMart `services/api/src/engine/verification.ts`, `engine/notify.ts`,
 the iPhone `Features/Profile/VerificationView.swift` and `Core/PushManager.swift`, and the console's Messages and Seller checks tabs.
-Test: `scripts/verify-notify.mjs` (54 checks).
+Test: `scripts/verify-notify.mjs` (57 checks).
 
 ## 8.1 Identity checks (Didit)
 
