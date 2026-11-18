@@ -93,6 +93,29 @@ def main() -> None:
             "attributes": {"capabilityType": "PUSH_NOTIFICATIONS"},
             "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bundle_id}}}}})
         print("enabled")
+    elif command == "store-profile":
+        # Creates an App Store profile for the bundle id with this Mac's distribution certificate
+        # (serial in env CERT_SERIAL) and installs it where Xcode looks. Prints the profile name.
+        import base64, pathlib
+        ids = get("bundleIds", {"filter[identifier]": value, "fields[bundleIds]": "identifier"})
+        match = [b for b in ids if b["attributes"]["identifier"] == value]
+        if not match:
+            sys.exit(2)
+        serial = os.environ["CERT_SERIAL"].upper().lstrip("0")
+        certs = get("certificates", {"limit": 200, "fields[certificates]": "serialNumber,certificateType,name"})
+        cert = [c for c in certs if c["attributes"]["serialNumber"].upper().lstrip("0") == serial]
+        if not cert:
+            print("this Mac's distribution certificate is not on the account", file=sys.stderr)
+            sys.exit(3)
+        name = f"MoneyMart App Store {time.strftime('%Y%m%d-%H%M')}"
+        created = post("profiles", {"data": {"type": "profiles",
+            "attributes": {"name": name, "profileType": "IOS_APP_STORE"},
+            "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": match[0]["id"]}},
+                              "certificates": {"data": [{"type": "certificates", "id": cert[0]["id"]}]}}}})
+        folder = pathlib.Path.home() / "Library/Developer/Xcode/UserData/Provisioning Profiles"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{created['attributes']['uuid']}.mobileprovision").write_bytes(base64.b64decode(created["attributes"]["profileContent"]))
+        print(name)
     elif command == "next-build":
         builds = get("builds", {"filter[app]": value, "limit": 200, "fields[builds]": "version"})
         numbers = [int(b["attributes"]["version"]) for b in builds if b["attributes"]["version"].isdigit()]
