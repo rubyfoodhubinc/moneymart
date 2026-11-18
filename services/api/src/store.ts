@@ -113,9 +113,74 @@ export const db = {
   reports: new Map<string, SafetyReport>(),
   /** Chat timeouts in a show, keyed `${streamId}>${userId}` → until (ISO). */
   chatMutes: new Map<string, string>(),
+  /** Prize Drops (giveaways) run in shows. */
+  giveaways: new Map<string, Giveaway>(),
+  /** Tips viewers sent hosts. */
+  tips: new Map<string, Tip>(),
+  /** Saved listings per member. */
+  watchlists: new Map<string, string[]>(),
+  /** Coins, credit and challenge progress per member. */
+  wallets: new Map<string, Wallet>(),
+  /** Offers on Buy It Now listings. */
+  offers: new Map<string, Offer>(),
+  /** Clips cut from shows. */
+  clips: new Map<string, Clip>(),
+  /** Direct messages, keyed by thread (the two member ids, sorted, joined by "|"). */
+  dms: new Map<string, DirectMessage[]>(),
+  /** Who invited whom, keyed by the invited member. */
+  referrals: new Map<string, Referral>(),
+  /** Paid promotion of a show or listing. */
+  promos: new Map<string, Promo>(),
   /** Active session identity, dev-only auth stand-in. */
   session: { userId: '' },
 };
+
+
+/* ── Engagement and growth records (Waves B and C) ─────── */
+export interface Giveaway {
+  id: string;
+  streamId: string;
+  sellerId: string;
+  title: string;
+  image?: string;
+  followersOnly: boolean;
+  entrants: string[];
+  status: 'open' | 'drawn' | 'cancelled';
+  winnerId?: string;
+  orderId?: string;
+  createdAt: string;
+  drawnAt?: string;
+}
+export interface Tip { id: string; streamId: string; fromId: string; toId: string; amount: number; currency: string; note?: string; at: string }
+export interface WalletEntry { at: string; kind: 'coins' | 'credit'; amount: number; reason: string }
+export interface Wallet {
+  userId: string;
+  coins: number;
+  credit: number;
+  /** Watch & Earn: minutes credited per stream today, keyed `${day}:${streamId}`. */
+  watched: Record<string, number>;
+  /** Challenge ids already claimed. */
+  claimed: string[];
+  history: WalletEntry[];
+}
+export interface Offer {
+  id: string;
+  auctionId: string;
+  buyerId: string;
+  sellerId: string;
+  amount: number;
+  currency: string;
+  status: 'pending' | 'countered' | 'accepted' | 'declined' | 'expired' | 'withdrawn';
+  counterAmount?: number;
+  orderId?: string;
+  message?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface Clip { id: string; streamId: string; creatorId: string; byId: string; title: string; startSec: number; endSec: number; views: number; createdAt: string }
+export interface DirectMessage { id: string; fromId: string; toId: string; body: string; at: string; readAt?: string }
+export interface Referral { referredId: string; referrerId: string; code: string; at: string; rewardedAt?: string }
+export interface Promo { id: string; sellerId: string; kind: 'stream' | 'listing'; targetId: string; amount: number; currency: string; startsAt: string; endsAt: string }
 
 /* ── AI spend ──────────────────────────────────────────── */
 export interface AiSpendRow {
@@ -443,6 +508,13 @@ export const chat = {
 };
 
 /* ── Orders & payouts ──────────────────────────────────── */
+type OrderListener = (order: Order) => void;
+const orderListeners: OrderListener[] = [];
+/** Celebrations, referrals and challenges subscribe here so every new order is seen once. */
+export function onOrderCreated(listener: OrderListener): void {
+  orderListeners.push(listener);
+}
+
 export const orders = {
   all: () => [...db.orders.values()],
   get: (id: string) => db.orders.get(id),
@@ -450,6 +522,7 @@ export const orders = {
   selling: (userId: string) => [...db.orders.values()].filter((o) => o.sellerId === userId),
   create: (order: Order) => {
     db.orders.set(order.id, order);
+    for (const listener of orderListeners) listener(order);
     return order;
   },
   save: (order: Order) => {
@@ -726,6 +799,15 @@ const COLLECTIONS = [
   'blocks',
   'reports',
   'chatMutes',
+  'giveaways',
+  'tips',
+  'watchlists',
+  'wallets',
+  'offers',
+  'clips',
+  'dms',
+  'referrals',
+  'promos',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

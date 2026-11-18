@@ -86,6 +86,11 @@ const SUITES = [
     detail: 'address gate, shipping per show + cap, Buy It Now stock, follows, blocks, reports, moderators, real earnings',
   },
   {
+    name: 'Engagement, seller tools & growth',
+    script: 'verify-engagement.mjs',
+    detail: 'Prize Drops, tips, offers, credit/coins/challenges/referrals, Seller Studio, clubs, leaderboards, messages, clips, promos, gated categories, vacation',
+  },
+  {
     name: 'Concurrency across auctions',
     script: 'verify-concurrency.mjs',
     detail: 'overlapping bids, simultaneous settlement, bids racing a close, books balanced',

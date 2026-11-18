@@ -76,6 +76,10 @@ import { startDelivery, deliveryStatus } from './engine/notify.js';
 import { VerificationError, handleWebhook, refreshCheck, startCheck, verifyWebhook, viewFor, webhookConfigured } from './engine/verification.js';
 import { pushDevices, follows } from './store.js';
 import { canModerate, mayChat, mountCommunityRoutes } from './community.js';
+import { joinLine, mountEngagementRoutes } from './engagement.js';
+import { claimBlocker, endVacations, isPromoted, listingBlocker, mountGrowthRoutes, onOrderPaid } from './growth.js';
+import { feeRateFor } from './engine/commission.js';
+import { setSellerFeeResolver } from './engine/escrow.js';
 import { canSellIn, marketOf, startRates } from './engine/markets.js';
 
 /** The country a seller sells from: their return address, else their account. */
@@ -1163,6 +1167,11 @@ app.post('/api/auctions', rateLimit(POLICIES.createListing), (req, res) => {
     res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(seller))?.name ?? sellerCountry(seller)} yet.` });
     return;
   }
+  const listingGate = listingBlocker(seller.id, body.categoryId);
+  if (listingGate) {
+    res.status(403).json({ error: listingGate.code, detail: listingGate.message, message: listingGate.message });
+    return;
+  }
   const now = Date.now();
   const itemId = store.nextId('itm');
   const auctionId = store.nextId('auc');
@@ -1332,6 +1341,14 @@ mountAiRoutes(app, (req) => actorId(req));
 mountCommunityRoutes(app, (req) => actorId(req), (room, event, payload) => {
   (io.to(room).emit as (e: string, p: unknown) => boolean)(event, payload);
 });
+const roomEmit = (room: string, event: string, payload: unknown) => {
+  (io.to(room).emit as (e: string, p: unknown) => boolean)(event, payload);
+};
+/* Wave B: Prize Drops, tips, reactions, Seller Studio, category feed, saved watchlist. */
+mountEngagementRoutes(app, { actorId: (req) => actorId(req), emit: roomEmit, expandStream, expandAuction });
+/* Wave C: coins, challenges, rewards, clubs, referrals, offers, clips, leaderboards, messages, policies, promotions, vacation. */
+mountGrowthRoutes(app, { actorId: (req) => actorId(req), emit: roomEmit, expandStream, expandAuction });
+setSellerFeeResolver((sellerId, categoryId) => feeRateFor(sellerId, categoryId));
 
 /** Staff only. 404 for everyone else, so the console's existence is not confirmed. */
 function requireStaff(req: Request, res: Response): string | null {
@@ -1582,6 +1599,10 @@ app.post('/api/streams', (req, res) => {
     res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(user))?.name ?? sellerCountry(user)} yet.` });
     return;
   }
+  if (user.vacation?.on) {
+    res.status(403).json({ error: 'on_vacation', detail: 'You’re on vacation. Turn vacation mode off to schedule shows.' });
+    return;
+  }
   if (settingValue<boolean>('sellers.verification_required') && user.verificationStatus !== 'verified') {
     res.status(403).json({ error: 'verification_required', detail: 'Verify your identity in Selling › Verification before scheduling a show.' });
     return;
@@ -1660,6 +1681,10 @@ app.post('/api/streams/batch', (req, res) => {
   }
   if (!canSellIn(sellerCountry(user))) {
     res.status(403).json({ error: 'country_closed', detail: `Selling isn’t open in ${marketOf(sellerCountry(user))?.name ?? sellerCountry(user)} yet.` });
+    return;
+  }
+  if (user.vacation?.on) {
+    res.status(403).json({ error: 'on_vacation', detail: 'You’re on vacation. Turn vacation mode off to schedule shows.' });
     return;
   }
   if (settingValue<boolean>('sellers.verification_required') && user.verificationStatus !== 'verified') {
@@ -1853,7 +1878,8 @@ app.get('/api/streams', (req, res) => {
     list = list.filter((s) => ids.has(s!.creatorId));
   }
   if (creator) list = list.filter((s) => s!.creatorId === creator);
-  list.sort((a, b) => b!.viewerCount - a!.viewerCount);
+  // Promoted shows lead, then the busiest.
+  list.sort((a, b) => Number(isPromoted('stream', b!.id)) - Number(isPromoted('stream', a!.id)) || b!.viewerCount - a!.viewerCount);
   res.json({ items: list, total: list.length });
 });
 
@@ -2149,6 +2175,7 @@ app.post('/api/orders/:id/status', (req, res) => {
   };
   const before = order.orderStatus;
   if (orderStatus) order.orderStatus = orderStatus;
+  if (orderStatus === 'shipped' && !order.shippedAt) order.shippedAt = store.iso();
   if (trackingNumber) order.trackingNumber = trackingNumber;
   if (courierName) order.courierName = courierName;
   orders.save(order);
@@ -2556,7 +2583,7 @@ app.post('/api/orders/:id/pay', async (req, res) => {
           : (req.body as { chargeAmountOverride?: number })?.chargeAmountOverride,
     });
     if (result.escrow.state === 'in_escrow') {
-      orders.save({ ...order, paymentStatus: 'paid', orderStatus: 'processing' });
+      onOrderPaid(orders.save({ ...order, paymentStatus: 'paid', orderStatus: 'processing', paidAt: store.iso() }));
     } else if (result.escrow.state === 'failed') {
       orders.save({ ...order, paymentStatus: 'failed' });
     }
@@ -2643,6 +2670,11 @@ app.post('/api/orders/:id/dispute', (req, res) => {
   const order = orders.get(req.params.id);
   if (!order) {
     res.status(404).json({ error: 'order_not_found' });
+    return;
+  }
+  const claimClosed = claimBlocker(order);
+  if (claimClosed) {
+    res.status(409).json({ error: 'claim_window_closed', message: claimClosed });
     return;
   }
   try {
@@ -3650,6 +3682,8 @@ io.on('connection', (socket) => {
     stream.peakViewerCount = Math.max(stream.peakViewerCount, stream.viewerCount);
     streams.save(stream);
     io.to(`stream:${streamId}`).emit('stream:viewers', { streamId, viewerCount: stream.viewerCount });
+    const joinedId = socketUserId(socket);
+    if (joinedId) joinLine(streamId, joinedId, roomEmit);
   });
 
   socket.on('stream:leave', (streamId: string) => {
@@ -3718,6 +3752,7 @@ io.on('connection', (socket) => {
 
 /* ── Heartbeat: settle due auctions, push ticks, drift viewer counts ───── */
 
+setInterval(endVacations, 60_000);
 setInterval(() => {
   const due = engine.auctionsDueForSettlement();
   due.forEach((auction) => {

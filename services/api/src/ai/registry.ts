@@ -31,6 +31,7 @@ export const SETTINGS: SettingDef[] = [
   { key: 'features.buy_now', label: 'Buy It Now', group: 'features', defaultValue: true, check: bool },
   { key: 'sellers.verification_required', label: 'Sellers must pass identity checks (Didit) before scheduling shows', group: 'features', defaultValue: false, check: bool },
   { key: 'buyers.address_required', label: 'Buyers add a shipping address before their first bid or buy', group: 'features', defaultValue: true, check: bool },
+  { key: 'categories.gated', label: 'Categories only verified sellers can list in', group: 'features', defaultValue: [], check: categoryList },
   { key: 'markets.countries', label: 'Countries open for buying and selling', group: 'features', defaultValue: {}, check: objectValue },
   { key: 'features.ore', label: 'Ore assistant in the app', group: 'features', defaultValue: true, check: bool },
   { key: 'home.banner', label: 'Home banner message', group: 'home', defaultValue: '', check: text(140) },

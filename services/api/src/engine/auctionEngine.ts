@@ -17,6 +17,7 @@ import type {
   AutoBid,
   Bid,
   BidRejectedPayload,
+  Order,
   Stream,
 } from '@moneymart/types';
 import { ANTI_SNIPE } from '@moneymart/tokens';
@@ -658,6 +659,35 @@ export function buyItNow(input: { auctionId: string; buyerId: string; buyerHandl
     if (stream) events.push(...advanceStreamQueue(stream));
   }
   return events;
+}
+
+/**
+ * Sell one unit at an agreed price (an accepted offer). Same order, escrow, fees and alerts as Buy It Now;
+ * the listing closes when its last unit goes.
+ */
+export function sellAt(input: { auctionId: string; buyerId: string; price: number }): { order?: Order; error?: string; message?: string } {
+  const auction = auctions.get(input.auctionId);
+  if (!auction) return { error: 'auction_not_found', message: 'This listing is gone.' };
+  if (!['live', 'scheduled'].includes(auction.status)) return { error: 'auction_ended', message: 'This listing is no longer for sale.' };
+  if (auction.sellerId === input.buyerId) return { error: 'self_bid', message: 'You cannot buy your own listing.' };
+  const blocker = buyerBlocker(auction, input.buyerId);
+  if (blocker) return { error: blocker.reason, message: blocker.message };
+  const quantity = Math.max(1, auction.quantity ?? 1);
+  const sold = auction.quantitySold ?? 0;
+  if (sold >= quantity) return { error: 'sold_out', message: 'Sold out.' };
+  const isPro = isProUser(input.buyerId);
+  const rate = money.effectiveBuyersPremiumRate(auction.buyersPremiumRate, items.get(auction.itemId)?.categoryId, isPro);
+  const { order } = createSaleOrder(auction, input.buyerId, input.price, rate, isPro);
+  auction.quantitySold = sold + 1;
+  if (auction.quantitySold >= quantity) {
+    auction.status = 'sold';
+    auction.winnerId = input.buyerId;
+    auction.currentBid = Math.max(auction.currentBid, input.price);
+  }
+  auctions.save(auction);
+  notifyWinner(auction, input.buyerId, input.price, rate, order.totalAmount, order.id);
+  notifySeller(auction, input.price);
+  return { order };
 }
 
 /** Maintain a live lot's clock; called from the server heartbeat. */

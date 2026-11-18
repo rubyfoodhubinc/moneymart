@@ -43,6 +43,8 @@ export interface User {
    * Private to the account owner: never part of the public profile.
    */
   sellerProfile?: SellerProfile;
+  /** Seller vacation mode: no new listings, shows or offers while on. */
+  vacation?: { on: boolean; message?: string; until?: ISODate };
   createdAt: ISODate;
   lastLoginAt?: ISODate;
 }
@@ -345,6 +347,14 @@ export interface Order {
   shippingNote?: string;
   /** Show the order came from, so shipping can be combined per show. */
   streamId?: string;
+  /** What was sold, for orders with no listing behind them (a Prize Drop). */
+  title?: string;
+  /** How the order came about when it was not a bid or Buy It Now. */
+  source?: 'offer' | 'prize_drop';
+  paidAt?: ISODate;
+  shippedAt?: ISODate;
+  /** MoneyMart credit the buyer used on this order (already taken off totalAmount). */
+  creditApplied?: number;
   trackingNumber?: string;
   courierName?: string;
   orderStatus: OrderStatus;

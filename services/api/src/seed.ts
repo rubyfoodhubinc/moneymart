@@ -643,6 +643,7 @@ export function clear(): void {
   db.blocks.clear();
   db.reports.clear();
   db.chatMutes.clear();
+  for (const name of ["giveaways", "tips", "watchlists", "wallets", "offers", "clips", "dms", "referrals", "promos"] as const) db[name].clear();
 }
 
 /** Wipe and rebuild the demo world. */
