@@ -61,7 +61,7 @@ if [ "${UPLOAD:-0}" = 1 ]; then
   # Mac's Apple Distribution certificate (scripts/asc.py store-profile) and named here. STORE_PROFILE overrides.
   if [ -z "${STORE_PROFILE:-}" ]; then
     SERIAL=$(security find-certificate -c "Apple Distribution: RUBYNAV INC" -p 2>/dev/null | openssl x509 -noout -serial 2>/dev/null | cut -d= -f2)
-    [ -n "$SERIAL" ] && STORE_PROFILE=$(CERT_SERIAL=$SERIAL python3 "$(dirname "$0")/asc.py" store-profile com.rubynav.moneymart 2>>$LOG || true)
+    [ -n "$SERIAL" ] && STORE_PROFILE=$(CERT_SERIAL=$SERIAL python3 -I scripts/asc.py store-profile com.rubynav.moneymart 2>>$LOG || true)
   fi
   if [ -n "${STORE_PROFILE:-}" ]; then
     SIGNING="<key>signingStyle</key><string>manual</string><key>signingCertificate</key><string>Apple Distribution</string><key>provisioningProfiles</key><dict><key>com.rubynav.moneymart</key><string>$STORE_PROFILE</string></dict>"
